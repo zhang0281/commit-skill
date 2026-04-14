@@ -24,11 +24,40 @@ class CliLibTest(unittest.TestCase):
             cli.maybe_write_output({"ok": True}, str(out))
             self.assertTrue(out.exists())
             self.assertIn('"ok": true', buf.getvalue())
+            cli.write_json_file({"x": 1}, str(out))
+            self.assertEqual(json.loads(out.read_text(encoding="utf-8")), {"x": 1})
+            cli.write_json_file({"x": 2}, None)
         parser = cli.build_parser()
         args = parser.parse_args(["inventory", "--repo", "/tmp/x"])
         self.assertEqual(args.command, "inventory")
         args2 = parser.parse_args(["commit", "--repo", "/tmp/x", "--file", "a.py", "--type", "feat", "--title", "x"])
         self.assertEqual(args2.command, "commit")
+        args3 = parser.parse_args(["plan", "--repo", "/tmp/x", "--summary-only"])
+        self.assertTrue(args3.summary_only)
+
+        summary = cli.plan_summary(
+            {
+                "ok": True,
+                "error_code": "OK",
+                "exit_code": 0,
+                "repo": "/repo",
+                "branch": "main",
+                "requested": {"split_mode": "auto", "sign_mode": "auto"},
+                "sign_context": {"suggested_sign_mode": "signed"},
+                "inventory": {
+                    "changed_files": ["a.py", "b.py"],
+                    "root_changed_files": ["a.py"],
+                    "submodules": [{"path": "sub"}],
+                    "top_level_groups": {"src": ["a.py"]},
+                },
+                "commits": [
+                    {"id": "1", "kind": "repo", "category": "code", "repo_path": "/repo", "paths": ["a.py"], "type_hint": "feat", "title_hint": "x"}
+                ],
+            },
+            "/tmp/plan.json",
+        )
+        self.assertEqual(summary["plan_file"], "/tmp/plan.json")
+        self.assertEqual(summary["candidate_count"], 1)
 
     def test_command_functions(self) -> None:
         ns = argparse.Namespace(repo="/repo", include=[], exclude=[], split_mode="auto", sign_mode="auto", out=None, json=True)
@@ -39,9 +68,21 @@ class CliLibTest(unittest.TestCase):
             writer.assert_called()
 
         with mock.patch.object(cli, "repo_root", return_value="/repo"), \
-             mock.patch.object(cli, "build_plan", return_value={"commits": []}), \
-             mock.patch.object(cli, "maybe_write_output"):
+             mock.patch.object(cli, "build_plan", return_value={"commits": [], "inventory": {"changed_files": [], "root_changed_files": [], "submodules": [], "top_level_groups": {}}, "repo": "/repo", "branch": "main", "requested": {"split_mode": "auto", "sign_mode": "auto"}, "sign_context": {}, "ok": True, "error_code": "OK", "exit_code": 0}), \
+             mock.patch.object(cli, "maybe_write_output") as write_out, \
+             mock.patch.object(cli, "write_json_file") as write_json:
             self.assertEqual(cli.command_plan(ns), 0)
+            write_out.assert_called_once()
+            write_json.assert_called_once()
+
+        ns_summary = argparse.Namespace(repo="/repo", include=[], exclude=[], split_mode="auto", sign_mode="auto", out="/tmp/plan.json", json=True, summary_only=True)
+        with mock.patch.object(cli, "repo_root", return_value="/repo"), \
+             mock.patch.object(cli, "build_plan", return_value={"commits": [], "inventory": {"changed_files": [], "root_changed_files": [], "submodules": [], "top_level_groups": {}}, "repo": "/repo", "branch": "main", "requested": {"split_mode": "auto", "sign_mode": "auto"}, "sign_context": {}, "ok": True, "error_code": "OK", "exit_code": 0}), \
+             mock.patch.object(cli, "maybe_write_output") as write_out, \
+             mock.patch.object(cli, "write_json_file") as write_json:
+            self.assertEqual(cli.command_plan(ns_summary), 0)
+            write_out.assert_called_once()
+            write_json.assert_called_once()
 
         cov_args = argparse.Namespace(plan_file=None, repo="/repo", planned=["a.py"], exclude=[], out=None, json=True)
         with mock.patch.object(cli, "repo_root", return_value="/repo"), \
@@ -63,6 +104,16 @@ class CliLibTest(unittest.TestCase):
              mock.patch.object(cli, "repo_root", return_value="/repo2"):
             with self.assertRaises(SkillError):
                 cli.command_apply_plan(args)
+
+        args_ok = argparse.Namespace(plan_file="/tmp/p.json", repo="/repo1", sign_mode="auto", out=None, json=True)
+        with mock.patch.object(cli, "load_plan_file", return_value={"repo": "/repo1", "commits": [{"repo_path": "/repo1", "paths": ["a"], "type": "feat", "title": "x", "bullets": []}], "exclude": []}), \
+             mock.patch.object(cli, "validate_plan_file", side_effect=lambda data, require_messages=False: data), \
+             mock.patch.object(cli, "repo_root", return_value="/repo1"), \
+             mock.patch.object(cli, "detect_signing", return_value={"suggested_sign_mode": "signed"}), \
+             mock.patch.object(cli, "apply_plan", return_value={"ok": True}), \
+             mock.patch.object(cli, "maybe_write_output") as writer:
+            self.assertEqual(cli.command_apply_plan(args_ok), 0)
+            writer.assert_called_once()
 
         commit_args = argparse.Namespace(repo="/repo", file=["a.py"], type="feat", title="x", bullet=["b"], sign_mode="auto", dry_run=True, out=None, json=True)
         with mock.patch.object(cli, "repo_root", return_value="/repo"), \

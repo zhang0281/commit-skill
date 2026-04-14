@@ -32,6 +32,15 @@ class PlannerLibTest(unittest.TestCase):
         self.assertEqual(changes[0]["submodule_path"], "vendor/x")
         self.assertEqual(pointers[0]["submodule_path"], "vendor/x")
 
+        mixed_sub = [
+            {"path": "vendor/y", "absolute_path": "/repo/vendor/y", "dirty": False, "dirty_files": [], "requires_pointer_update": True},
+            {"path": "vendor/z", "absolute_path": "/repo/vendor/z", "dirty": False, "dirty_files": [], "requires_pointer_update": False},
+        ]
+        commits2, changes2, pointers2 = planner.build_submodule_templates("/repo", mixed_sub, "signed")
+        self.assertEqual(len(changes2), 0)
+        self.assertEqual(len(pointers2), 1)
+        self.assertEqual(len(commits2), 1)
+
         fake_inventory = {
             "branch": "main",
             "sign_context": {"suggested_sign_mode": "signed"},

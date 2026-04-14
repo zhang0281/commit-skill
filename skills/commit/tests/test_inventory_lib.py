@@ -38,6 +38,25 @@ class InventoryLibTest(unittest.TestCase):
         blocks = inventory.parse_named_blocks("=== a ===\n1\n=== b ===\n2\n")
         self.assertEqual(blocks, {"a": ["1"], "b": ["2"]})
 
+        self.assertEqual(inventory._read_null_terminated("abc\0", 0), ("abc", 4))
+        self.assertEqual(inventory._read_null_terminated("abc", 0), ("abc", 3))
+
+    def test_parse_status_porcelain_z_branches(self) -> None:
+        payload = "?? foo.py\0R  old.py\0new.py\0C  old2.py\0new2.py\0?? \0M "
+        with mock.patch.object(inventory, "git", return_value=CmdResult([], 0, payload, "")):
+            entries = inventory.parse_status("/repo")
+        self.assertEqual(entries[0]["path"], "foo.py")
+        self.assertEqual(entries[1]["path"], "new.py")
+        self.assertEqual(entries[2]["path"], "new2.py")
+
+        payload2 = "R  old.py\0\0"
+        with mock.patch.object(inventory, "git", return_value=CmdResult([], 0, payload2, "")):
+            entries2 = inventory.parse_status("/repo")
+        self.assertEqual(entries2[0]["path"], "old.py")
+
+        self.assertEqual(inventory.parse_named_blocks("orphan\n"), {})
+        self.assertEqual(inventory.parse_named_blocks("orphan\n=== a ===\n1\n"), {"a": ["1"]})
+
     def test_parse_status_and_submodules_and_build_inventory(self) -> None:
         with mock.patch.object(inventory, "git", return_value=CmdResult([], 1, "", "boom")):
             with self.assertRaises(SkillError) as ctx:
@@ -62,10 +81,23 @@ class InventoryLibTest(unittest.TestCase):
                 inventory.collect_submodule_maps("/repo")
             self.assertEqual(ctx.exception.code, ErrorCode.SUBMODULE_SCAN_FAILED)
 
+        status_map2 = {"vendor/sub": {"path": "vendor/sub"}, "another": {"path": "another"}}
+        changed = inventory.determine_changed_submodule_paths(
+            [{"path": "vendor/sub/file.py"}, {"path": "another"}],
+            status_map2,
+        )
+        self.assertEqual(changed, {"vendor/sub", "another"})
+
+        with mock.patch.object(inventory, "git", return_value=CmdResult([], 2, "", "bad child")):
+            with self.assertRaises(SkillError) as ctx:
+                inventory.collect_changed_submodule_details("/repo", {"vendor/sub"})
+            self.assertEqual(ctx.exception.code, ErrorCode.SUBMODULE_SCAN_FAILED)
+
         state = {"status_map": {"vendor/sub": {"prefix": "-", "sha": "abc", "path": "vendor/sub"}}, "dirty_blocks": {"vendor/sub": [" M inner.py"]}, "ahead_blocks": {"vendor/sub": ["123 commit"]}}
         record = inventory.build_submodule_record("/repo", "vendor/sub", state)
         self.assertTrue(record["dirty"])
         self.assertTrue(record["requires_pointer_update"])
+        self.assertEqual(record["ahead_commits"], ["123 commit"])
 
         with mock.patch.object(inventory, "parse_status", return_value=[{"path": "README.md", "category": "docs"}, {"path": "vendor/sub", "category": "code"}]), \
              mock.patch.object(inventory, "detect_signing", return_value={"suggested_sign_mode": "signed"}), \
