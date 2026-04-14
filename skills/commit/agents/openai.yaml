@@ -1,0 +1,4 @@
+interface:
+  display_name: "Commit"
+  short_description: "自动并行只读分析改动，单次覆盖全部修改，零文件修改生成规范 Git 提交"
+  default_prompt: "分析当前 Git 变更，先做轻量 inventory；按复杂度自动启用子代理并行只读分析分组改动与 submodule，主线程只做 file-level staging 与统一提交，绝不修改任何工作区文件内容；默认一次 $commit 覆盖全部修改，优先纯语义拆分，必要时降级为模块级或文件级综合提交并通过 coverage audit 收口；多行提交信息强制使用多个 -m：标题一个 -m，每条正文 bullet 一个 -m；多个子模块更新在父仓库聚合提交。"

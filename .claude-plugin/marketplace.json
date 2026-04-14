@@ -1,0 +1,22 @@
+{
+  "name": "zhang-agent-skills",
+  "owner": {
+    "name": "zhang0281",
+    "email": "change-me@example.com"
+  },
+  "metadata": {
+    "description": "Custom skills published by zhang0281",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "commit-skill",
+      "description": "规范 Git 提交技能，支持分组分析、coverage audit 与多行 commit message 生成。",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/commit"
+      ]
+    }
+  ]
+}
