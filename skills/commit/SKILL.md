@@ -44,30 +44,20 @@ description: 拆分并创建规范 Git 提交。Use when Codex or Claude Code ne
 
 ### 1) 自动先跑 `plan`
 
-这是 `$commit` 的第一步，不需要用户手动触发，但用户也可以手动调试：
+`$commit` 默认在 root 仓后立即执行：
 
 ```bash
-python3 scripts/commit_skill.py plan --repo . --json
+python3 scripts/commit_skill.py plan --repo . --out /tmp/commit-plan.json --summary-only
 ```
 
-按需加边界：
+`plan` 会在**第一时间**收集 facts、产出 summary-only JSON，并将完整 plan 写入 `/tmp/commit-plan.json`：
 
-```bash
-python3 scripts/commit_skill.py plan --repo . --json \
-  --include src/api.py --include src/utils.py \
-  --exclude docs \
-  --split-mode auto \
-  --sign-mode auto
-```
-
-`plan` 内部已自动完成：
-
-- inventory 收集
-- GPG / sign_mode 探测
-- 路径分类与粗分组
+- inventory 收集（含 `git status --porcelain -z`）
 - submodule dirty / pointer / ahead 检测
-- 生成 **可编辑 plan JSON**
+- sign_mode 探测（仅读取 Git config，推迟 GPG 探测至 later steps）
+- 路径分类与候选 `commit` 分组
 - 统一错误码输出
+- 同时生成供 AI 直接编辑的 **可编辑 plan JSON**
 
 ### 2) AI 基于 plan JSON 做裁决
 
@@ -80,6 +70,18 @@ AI 只做这些高价值判断：
 5. 填写中文 Conventional Commit 的 `type` / `title` / `bullets`
 
 AI 不应手写 Git 命令，而应编辑 plan JSON 的 `commits` 列表。
+
+### 多子代理并行分析（恢复）
+
+当 `plan` 发现多个候选 commit 或同时存在 root 仓与一个以上 submodule 的改动时，主线程必须启动 `explorer` 子代理：
+
+- 每个 candidate commit 或 submodule 分支都分配一个子代理，仅读对应 `paths` / `repo_path`
+- 子代理只运行 `git status --porcelain -z` / `git diff --name-status` / `git log -1` / `git submodule status`；禁止写、禁止 `git add/commit/reset`
+- 子代理返回：该 candidate 的实际 changed files、top-level grouping、sign hints、依赖 submodule 状态
+- 主线程在收集所有子代理汇报后更新 plan JSON，确保 commit candidates 与 submodule internal/pointer 条目都覆盖真实 facts
+- 多子代理仅用于 fact-gathering，最终 coverage 与 apply 仍在主线程执行
+
+这样确保大型仓在 plan 阶段就把 facts 并行拾起，再由 AI 编辑最终 plan JSON，避免单线程堵塞。
 
 ### 3) 执行前跑 coverage
 

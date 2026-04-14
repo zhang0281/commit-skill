@@ -30,9 +30,10 @@
    - 后者服务 Claude Code
 
 3. **以 `plan JSON` 作为 AI 与脚本的中介协议**
-   - `plan` 负责生成结构化候选计划
-   - AI 负责编辑 `commits` 的语义字段
-   - `coverage` / `apply-plan` 消费最终计划
+ - `plan` 负责生成结构化候选计划
+ - AI 负责编辑 `commits` 的语义字段
+ - `coverage` / `apply-plan` 消费最终计划
+  - 默认自动跑 `plan --summary-only`，向模型提供精简 summary，同时把完整 JSON 写 `/tmp/commit-plan.json` 供后续复用
 
 4. **保留单入口 `scripts/commit_skill.py`，内部拆成多模块**
    - 对 AI 保持稳定调用面
@@ -83,3 +84,7 @@
 **影响范围**: `skills/commit/SKILL.md`、`skills/commit/agents/openai.yaml`、`skills/commit/scripts/`、`skills/commit/tests/`
 
 **决策依据**: 用 plan JSON 作为 AI 与脚本的协作中介，进一步减少 prompt 复杂度并提升可测试性
+- **恢复多子代理并行分析**：
+  - `plan` 产出多个 candidate 或 root + submodule 混合时，主线程 spawn explorer 子代理按 candidate/submodule 分头只读分析 facts
+  - 子代理仅允许 `git status --porcelain -z` / `git diff --name-status` / `git log -1` / `git submodule status`
+  - 主线程汇总后更新 plan JSON，确保 AI 与 coverage/apply-plan 使用真实信息

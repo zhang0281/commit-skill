@@ -116,8 +116,23 @@ def build_submodule_templates(repo: str, submodules: list[dict[str, object]], si
     return commits, submodule_changes, required_pointer_updates
 
 
-def build_plan(repo: str, includes: list[str], excludes: list[str], split_mode: str, sign_mode: str) -> dict[str, object]:
-    inventory = build_inventory(repo, includes, excludes, split_mode, sign_mode)
+def build_plan(
+    repo: str,
+    includes: list[str],
+    excludes: list[str],
+    split_mode: str,
+    sign_mode: str,
+    *,
+    lazy_signing: bool = False,
+) -> dict[str, object]:
+    inventory = build_inventory(
+        repo,
+        includes,
+        excludes,
+        split_mode,
+        sign_mode,
+        lazy_signing=lazy_signing,
+    )
     resolved_sign_mode = resolve_sign_mode(sign_mode, inventory["sign_context"])
     commits = build_repo_commit_templates(repo, inventory, split_mode, resolved_sign_mode)
     submodule_commits, submodule_changes, required_pointer_updates = build_submodule_templates(

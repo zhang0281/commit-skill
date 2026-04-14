@@ -16,7 +16,6 @@ GPG_ERROR_PATTERNS = (
 )
 
 
-
 def current_env() -> dict[str, str]:
     env = os.environ.copy()
     if sys.stdin.isatty():
@@ -26,6 +25,41 @@ def current_env() -> dict[str, str]:
             pass
     return env
 
+
+def _suggested_sign_mode(
+    requested_sign_mode: str | None,
+    signing_available: bool,
+) -> str:
+    if requested_sign_mode in {"signed", "unsigned"}:
+        return requested_sign_mode
+    return "signed" if signing_available else "unsigned"
+
+
+def peek_signing(repo: str, requested_sign_mode: str | None = None) -> dict[str, object]:
+    repo_gpgsign = git_get(repo, "commit.gpgsign")
+    global_gpgsign = git_get(repo, "commit.gpgsign", global_scope=True)
+    repo_signingkey = git_get(repo, "user.signingkey")
+    global_signingkey = git_get(repo, "user.signingkey", global_scope=True)
+    signing_available = bool(
+        repo_gpgsign == "true"
+        or global_gpgsign == "true"
+        or repo_signingkey
+        or global_signingkey
+    )
+    return {
+        "probe_mode": "config-only",
+        "has_tty": sys.stdin.isatty(),
+        "gpg_tty": os.environ.get("GPG_TTY", ""),
+        "gpg_agent_launch_ok": None,
+        "gpg_agent_launch_stderr": "",
+        "secret_key_ids": [],
+        "repo_commit_gpgsign": repo_gpgsign,
+        "global_commit_gpgsign": global_gpgsign,
+        "repo_signingkey": repo_signingkey,
+        "global_signingkey": global_signingkey,
+        "suggested_sign_mode": _suggested_sign_mode(requested_sign_mode, signing_available),
+        "signing_available": signing_available,
+    }
 
 
 def detect_signing(repo: str, requested_sign_mode: str | None = None) -> dict[str, object]:
@@ -40,38 +74,22 @@ def detect_signing(repo: str, requested_sign_mode: str | None = None) -> dict[st
         if match:
             key_ids.append(match.group(1))
 
-    repo_gpgsign = git_get(repo, "commit.gpgsign")
-    global_gpgsign = git_get(repo, "commit.gpgsign", global_scope=True)
-    repo_signingkey = git_get(repo, "user.signingkey")
-    global_signingkey = git_get(repo, "user.signingkey", global_scope=True)
-    signing_available = bool(
-        key_ids or repo_gpgsign == "true" or global_gpgsign == "true" or repo_signingkey or global_signingkey
-    )
-
-    if requested_sign_mode in {"signed", "unsigned"}:
-        suggested = requested_sign_mode
-    else:
-        suggested = "signed" if signing_available else "unsigned"
-
+    base = peek_signing(repo, requested_sign_mode=requested_sign_mode)
+    signing_available = bool(key_ids) or bool(base["signing_available"])
     return {
-        "has_tty": sys.stdin.isatty(),
+        **base,
+        "probe_mode": "full",
         "gpg_tty": env.get("GPG_TTY", ""),
         "gpg_agent_launch_ok": launch.returncode == 0,
         "gpg_agent_launch_stderr": launch.stderr.strip(),
         "secret_key_ids": key_ids,
-        "repo_commit_gpgsign": repo_gpgsign,
-        "global_commit_gpgsign": global_gpgsign,
-        "repo_signingkey": repo_signingkey,
-        "global_signingkey": global_signingkey,
-        "suggested_sign_mode": suggested,
+        "suggested_sign_mode": _suggested_sign_mode(requested_sign_mode, signing_available),
         "signing_available": signing_available,
     }
 
 
-
 def resolve_sign_mode(requested: str, sign_context: dict[str, object]) -> str:
     return requested if requested != "auto" else str(sign_context["suggested_sign_mode"])
-
 
 
 def is_gpg_failure(stderr: str) -> bool:
