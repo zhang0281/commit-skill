@@ -1,6 +1,6 @@
 ---
 name: commit
-description: 拆分并创建规范 Git 提交。Use when Codex needs to inspect working tree changes, decide commit boundaries, handle submodule pointer updates, generate Chinese Conventional Commit messages, or execute a safe commit workflow. Invoke explicitly with $commit when the user wants “提交当前改动”“帮我 commit”“分开提交”“只提交某些文件”“排除某些文件”。
+description: 拆分并创建规范 Git 提交。Use when Codex or Claude Code needs to inspect working tree changes, build an editable commit plan JSON, decide commit boundaries, handle submodule internal commits and pointer updates, generate Chinese Conventional Commit messages, or execute a safe commit workflow from a finalized plan.
 ---
 
 # Commit
@@ -10,8 +10,15 @@ description: 拆分并创建规范 Git 提交。Use when Codex needs to inspect 
 ## 核心定位
 
 - **AI 负责**：语义拆分、标题与 bullets、残余提交裁决
-- **脚本负责**：inventory、签名探测、coverage audit、实际 `git add` / `git commit`
+- **脚本负责**：inventory、plan JSON、签名探测、coverage audit、submodule 扫描、实际 `git add` / `git commit`
+- **默认流**：`plan` 自动先跑；用户可手动调用，但 `$commit` 本身也必须先调它
 - **铁律**：不改工作区文件内容、不做 partial staging、不遗漏未显式排除的改动
+
+## 兼容性
+
+- **Codex**：通过 `agents/openai.yaml` 触发；执行 `scripts/commit_skill.py`
+- **Claude Code**：通过 `.claude-plugin/marketplace.json` 暴露 skill；执行同一份 `scripts/commit_skill.py`
+- 脚本仅依赖 Python stdlib + `git` / `gpg` / `gpgconf`，避免平台专属依赖
 
 ## 使用方式
 
@@ -33,108 +40,149 @@ description: 拆分并创建规范 Git 提交。Use when Codex needs to inspect 
 - “不签名” / “禁用 GPG” → `sign_mode=unsigned`
 - 未指定时：`split_mode=auto`、`sign_mode=auto`
 
-## 先跑脚本
+## 默认执行链
 
-始终先运行 inventory，优先拿结构化事实，再让 AI 裁决：
+### 1) 自动先跑 `plan`
+
+这是 `$commit` 的第一步，不需要用户手动触发，但用户也可以手动调试：
 
 ```bash
-python3 scripts/commit_skill.py inventory --repo . --json
+python3 scripts/commit_skill.py plan --repo . --json
 ```
 
 按需加边界：
 
 ```bash
-python3 scripts/commit_skill.py inventory --repo . --json \
+python3 scripts/commit_skill.py plan --repo . --json \
   --include src/api.py --include src/utils.py \
   --exclude docs \
   --split-mode auto \
   --sign-mode auto
 ```
 
-inventory 输出重点：
+`plan` 内部已自动完成：
 
-- `changed_files`：全部改动文件
-- `filtered_files`：应用 include/exclude 后的候选文件
-- `top_level_groups`：按顶层路径归组
-- `submodules`：dirty / pointer / ahead 情况
-- `sign_context`：GPG/签名配置、建议的 `sign_mode`
+- inventory 收集
+- GPG / sign_mode 探测
+- 路径分类与粗分组
+- submodule dirty / pointer / ahead 检测
+- 生成 **可编辑 plan JSON**
+- 统一错误码输出
 
-## AI 裁决规则
+### 2) AI 基于 plan JSON 做裁决
 
 AI 只做这些高价值判断：
 
-1. 这些文件是否服务于同一个目的
+1. 这些候选分组是否服务于同一个目的
 2. 是否应拆成多个纯语义 commit
-3. 若无法纯语义拆分，降级为模块级或文件级 residual commit
-4. 生成中文 Conventional Commit 标题与 bullets
+3. 是否需要合并 docs / tests / config 到同一个语义单元
+4. 若无法纯语义拆分，降级为模块级或文件级 residual commit
+5. 填写中文 Conventional Commit 的 `type` / `title` / `bullets`
 
-切分优先级：
+AI 不应手写 Git 命令，而应编辑 plan JSON 的 `commits` 列表。
 
-1. 用户边界
-2. submodule 内部提交先于父仓库 pointer 更新
-3. 语义完整性
-4. docs / tests / config 尽量独立
-5. 最小可回滚单元
+### 3) 执行前跑 coverage
 
-禁止：
-
-- 留下未显式排除的改动
-- 因“懒得归类”而做空泛 snapshot commit
-- 部分暂存
-- 修改源码/文档/配置内容来迎合提交边界
-
-## 只在需要时看定向 diff
-
-确认某个候选提交前，再看 path-scoped diff：
+对最终 plan JSON 做覆盖校验：
 
 ```bash
-git diff --name-status HEAD -- <paths...>
-git diff HEAD -- <paths...>
+python3 scripts/commit_skill.py coverage --plan-file /tmp/commit-plan.json --json
 ```
 
-不要一开始就整仓库 `git diff HEAD`。
+若 `passed=false`：
 
-## Coverage audit
+- 继续补 `commits`
+- 或在 `exclude` 中加入用户显式排除项
+- 直到 `uncovered` 归零
 
-执行提交前，必须校验：
-
-```text
-all_changed_files
-= planned_commit_files
-+ explicit_excluded_files
-+ submodule_internal_commits 对应的 pointer 更新
-```
-
-使用脚本：
+### 4) 最后用 `apply-plan` 落地
 
 ```bash
-python3 scripts/commit_skill.py coverage --repo . --json \
-  --planned src/api.py --planned src/utils.py \
-  --exclude docs
+python3 scripts/commit_skill.py apply-plan --plan-file /tmp/commit-plan.json --json
 ```
 
-若 `uncovered_files` 非空，继续补 residual commit，直到归零。
+`apply-plan` 会：
 
-## 执行提交
+- 先复核 coverage
+- 逐个执行 commit
+- 自动处理 `sign_mode`
+- 在 submodule 内部 repo 执行对应 commit
+- 再在父仓库执行 submodule pointer commit
+- 返回 SHA / signed / fallback / attempts / 错误码
 
-每个 commit 一律通过脚本执行，而不是手写 `git commit`：
+## 计划 JSON 结构
+
+`plan` 输出的是**可编辑计划**，核心字段：
+
+```json
+{
+  "schema_version": 1,
+  "repo": "/abs/repo",
+  "requested": {
+    "split_mode": "auto",
+    "sign_mode": "auto"
+  },
+  "sign_context": {},
+  "inventory": {},
+  "commits": [
+    {
+      "id": "repo:docs",
+      "repo_path": "/abs/repo",
+      "kind": "repo",
+      "paths": ["README.md"],
+      "type": "",
+      "title": "",
+      "bullets": [],
+      "type_hint": "docs",
+      "title_hint": "更新文档",
+      "bullet_hints": ["..."],
+      "sign_mode": "auto"
+    }
+  ],
+  "exclude": [],
+  "coverage_baseline": {}
+}
+```
+
+约束：
+
+- `type` 必须是 `feat|fix|docs|refactor|test|chore|style|perf`
+- `title` 必须非空
+- `bullets` 必须是字符串数组
+- `paths` 相对 `repo_path`
+- plan JSON 建议写到 `/tmp/commit-plan.json`，不要写回仓库工作区
+
+## 手动调试子命令
+
+### 仅看 inventory
+
+```bash
+python3 scripts/commit_skill.py inventory --repo . --json
+```
+
+### 手动生成 plan JSON 文件
+
+```bash
+python3 scripts/commit_skill.py plan --repo . --json > /tmp/commit-plan.json
+```
+
+### 对单个 commit 直接执行（调试用途）
 
 ```bash
 python3 scripts/commit_skill.py commit --repo . \
-  --file src/api.py --file src/utils.py \
-  --type feat \
-  --title '新增接口适配层' \
-  --bullet '整理 API 调用入口' \
-  --bullet '统一工具函数调用方式' \
+  --file src/api.py \
+  --type fix \
+  --title '修复接口参数透传' \
+  --bullet '修正请求参数映射' \
   --sign-mode auto
 ```
 
-### 签名规则
+## 签名规则
 
 - `sign_mode=auto`：若探测到可用 GPG 私钥或 Git 已配置签名，则优先尝试 `git commit -S`
 - `sign_mode=signed`：强制 signed commit；失败即报错
 - `sign_mode=unsigned`：明确无签名提交
-- 若 `auto` 路径签名失败，且错误属于 `gpg-agent` / `pinentry` / `No agent running` / `failed to sign the data`，脚本只允许**单次** fallback 到：
+- 若 `auto` 路径签名失败，且错误属于 `gpg-agent` / `pinentry` / `No agent running` / `failed to sign the data`，只允许**单次** fallback 到：
 
 ```bash
 git -c commit.gpgsign=false commit ...
@@ -145,16 +193,39 @@ git -c commit.gpgsign=false commit ...
 - 若有 TTY，则设置 `GPG_TTY=$(tty)`
 - 尝试 `gpgconf --launch gpg-agent`
 - 探测 `gpg --list-secret-keys --keyid-format LONG`
-- 统一拼装多个 `-m`
 - 返回本次是否 signed / 是否发生 fallback / 最终 SHA
 
 ## Submodule 规则
 
-若 inventory 发现 dirty submodule：
+`plan` 会显式产生两类 submodule commit：
 
-1. 先对**子模块仓库路径**单独运行 `commit` 子命令
-2. 子模块提交完成后，再在父仓库提交 submodule pointer 更新
-3. pointer 更新可聚合为一个 `chore`
+1. `submodule_internal`
+   - 在子模块仓库内提交 dirty files
+2. `submodule_pointer`
+   - 在父仓库提交 gitlink / pointer 更新
+
+AI 应遵循：
+
+- submodule internal commit 先于 pointer commit
+- pointer commit 可由多个子模块合并成一个 `chore`，但必须保持语义清楚
+
+## 统一错误码
+
+脚本所有子命令均返回结构化错误：
+
+- `OK=0`
+- `INVALID_ARGUMENT=10`
+- `NOT_GIT_REPO=11`
+- `PLAN_FILE_INVALID=12`
+- `GIT_STATUS_FAILED=20`
+- `GIT_DIFF_FAILED=21`
+- `GIT_ADD_FAILED=22`
+- `GIT_COMMIT_FAILED=23`
+- `COVERAGE_GAP=30`
+- `PLAN_APPLY_FAILED=31`
+- `GPG_REQUIRED_FAILED=40`
+- `GPG_AUTO_FAILED=41`
+- `SUBMODULE_SCAN_FAILED=50`
 
 ## 安全边界
 

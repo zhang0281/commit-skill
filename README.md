@@ -14,25 +14,48 @@ commit-skill/
         ├── SKILL.md
         ├── agents/
         │   └── openai.yaml
-        └── scripts/
-            └── commit_skill.py
+        ├── scripts/
+        │   ├── commit_skill.py
+        │   └── lib/
+        └── tests/
 ```
 
-## 包含内容
+## 架构
 
-- `skills/commit/SKILL.md`：`commit` 技能主指令
-- `skills/commit/agents/openai.yaml`：技能展示与默认提示词
-- `skills/commit/scripts/commit_skill.py`：inventory、coverage audit、签名探测与 commit 执行脚本
-- `.claude-plugin/marketplace.json`：参考 `anthropics/skills` 的 marketplace 元数据
+本仓库的 `commit` skill 采用 **AI 判定 + 代码执行** 的混合模式：
 
-## 用途
+- **AI**：做语义拆分、残余提交裁决、中文提交信息生成
+- **脚本**：做 inventory、plan JSON、coverage audit、统一错误码、submodule 扫描、签名探测与真正的 `git commit`
 
-- 作为 GitHub 技能仓库供后续接入 cc-switch
-- 作为 Claude 风格 marketplace 仓库骨架
-- 采用 **AI 判定 + 代码执行** 的混合模式，减少长 prompt 带来的 token 消耗
+## 兼容性
 
-## 后续建议
+- **Codex**：通过 `skills/commit/agents/openai.yaml` 暴露 metadata
+- **Claude Code**：通过仓库根 `.claude-plugin/marketplace.json` 暴露 marketplace 信息
+- 两端共享同一份 `skills/commit/SKILL.md` 与 `skills/commit/scripts/` 逻辑
 
-1. 初始化 Git 仓库并关联远端 `zhang0281/commit-skill`
-2. 提交并 push 到 GitHub
-3. 在 cc-switch 中添加该技能仓库后再安装 `commit`
+## 默认工作流
+
+1. `plan`：自动生成可编辑 commit 计划 JSON
+2. AI 基于计划 JSON 做语义裁决，补全 `type/title/bullets`
+3. `coverage --plan-file`：校验计划覆盖度
+4. `apply-plan --plan-file`：统一执行 commit
+
+## 脚本子命令
+
+- `inventory`：调试库存信息
+- `plan`：生成可编辑计划 JSON
+- `coverage`：按参数或 plan JSON 执行覆盖校验
+- `apply-plan`：执行最终计划
+- `commit`：直接执行单个 commit（调试用途）
+
+## 测试
+
+```bash
+python3 -m unittest discover -s skills/commit/tests -p 'test_*.py'
+```
+
+## 说明
+
+- `plan` 子命令既可手动调用，也会在 `$commit` 默认流程中自动先跑
+- 统一错误码便于 Codex 与 Claude Code 都稳定消费脚本结果
+- `sign-mode=auto` 下，若 GPG 可用则优先 signed commit

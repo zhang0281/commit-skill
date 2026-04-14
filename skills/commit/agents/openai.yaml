@@ -1,4 +1,4 @@
 interface:
   display_name: "Commit"
-  short_description: "自动并行只读分析改动，单次覆盖全部修改，零文件修改生成规范 Git 提交"
-  default_prompt: "先运行 scripts/commit_skill.py inventory 收集结构化事实；AI 只负责语义拆分、中文标题与 bullets、submodule 顺序和 residual commit 裁决；提交前用 coverage 子命令收口；执行时一律走 commit 子命令，sign-mode 默认 auto，GPG 可用时优先签名，仅在签名链明确故障时允许单次无签名降级。"
+  short_description: "自动生成计划 JSON、语义裁决并安全执行 Git 提交"
+  default_prompt: "先自动运行 scripts/commit_skill.py plan 获取结构化计划 JSON；AI 只负责按语义合并/拆分 commits、补全中文 type/title/bullets，并在执行前调用 coverage --plan-file 收口，最后统一用 apply-plan 执行；submodule internal 与 pointer 更新必须分阶段处理；sign-mode 默认 auto，GPG 可用时优先签名；所有错误按统一错误码输出。"
