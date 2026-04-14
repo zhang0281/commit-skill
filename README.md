@@ -12,20 +12,24 @@ commit-skill/
 └── skills/
     └── commit/
         ├── SKILL.md
-        └── agents/
-            └── openai.yaml
+        ├── agents/
+        │   └── openai.yaml
+        └── scripts/
+            └── commit_skill.py
 ```
 
 ## 包含内容
 
 - `skills/commit/SKILL.md`：`commit` 技能主指令
 - `skills/commit/agents/openai.yaml`：技能展示与默认提示词
+- `skills/commit/scripts/commit_skill.py`：inventory、coverage audit、签名探测与 commit 执行脚本
 - `.claude-plugin/marketplace.json`：参考 `anthropics/skills` 的 marketplace 元数据
 
 ## 用途
 
 - 作为 GitHub 技能仓库供后续接入 cc-switch
 - 作为 Claude 风格 marketplace 仓库骨架
+- 采用 **AI 判定 + 代码执行** 的混合模式，减少长 prompt 带来的 token 消耗
 
 ## 后续建议
 
