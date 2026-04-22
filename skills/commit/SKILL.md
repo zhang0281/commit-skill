@@ -71,17 +71,17 @@ AI 只做这些高价值判断：
 
 AI 不应手写 Git 命令，而应编辑 plan JSON 的 `commits` 列表。
 
-### 多子代理并行分析（恢复）
+### 多子代理并行分析（仅限 gpt-5.4）
 
-当 `plan` 发现多个候选 commit 或同时存在 root 仓与一个以上 submodule 的改动时，主线程必须启动 `explorer` 子代理：
+仅当**当前主模型为 `gpt-5.4`**，且 `plan` 发现多个候选 commit 或同时存在 root 仓与一个以上 submodule 的改动时，主线程才可启动 `explorer` 子代理；非 `gpt-5.4` 模型一律退化为主线程串行 fact-gathering，不得 `spawn_agent`。
 
-- 每个 candidate commit 或 submodule 分支都分配一个子代理，仅读对应 `paths` / `repo_path`
+- 每个 candidate commit 或 submodule 分支都分配一个子代理，且固定 `model=gpt-5.4`，仅读对应 `paths` / `repo_path`
 - 子代理只运行 `git status --porcelain -z` / `git diff --name-status` / `git log -1` / `git submodule status`；禁止写、禁止 `git add/commit/reset`
 - 子代理返回：该 candidate 的实际 changed files、top-level grouping、sign hints、依赖 submodule 状态
 - 主线程在收集所有子代理汇报后更新 plan JSON，确保 commit candidates 与 submodule internal/pointer 条目都覆盖真实 facts
 - 多子代理仅用于 fact-gathering，最终 coverage 与 apply 仍在主线程执行
 
-这样确保大型仓在 plan 阶段就把 facts 并行拾起，再由 AI 编辑最终 plan JSON，避免单线程堵塞。
+这样确保大型仓在 plan 阶段就把 facts 并行拾起，再由 AI 编辑最终 plan JSON；若不满足 `gpt-5.4` 条件，则走串行路径，避免错误使用子代理。
 
 ### 3) 执行前跑 coverage
 

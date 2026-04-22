@@ -1,4 +1,4 @@
 interface:
   display_name: "Commit"
   short_description: "plan --> plan JSON --> coverage --> apply-plan"
-  default_prompt: "先自动运行 plan --summary-only，写出 /tmp/commit-plan.json；AI 只编辑计划的 commits、type/title/bullets，同时按 plan 产出多个候选或 submodule 时 spawn explorer 子代理采集 facts；coverage --plan-file 校验，最后 apply-plan 执行；sign-mode auto，GPG 可用优先签名；按错误码返回结果。"
+  default_prompt: "先自动运行 plan --summary-only，写出 /tmp/commit-plan.json；AI 只编辑计划的 commits、type/title/bullets；仅当当前主模型为 gpt-5.4 且 plan 产出多个候选或 submodule 时，才 spawn explorer 子代理并固定 model=gpt-5.4 采集 facts，否则退化为主线程串行采集；coverage --plan-file 校验，最后 apply-plan 执行；sign-mode auto，GPG 可用优先签名；按错误码返回结果。"

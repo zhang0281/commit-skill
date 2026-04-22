@@ -55,6 +55,16 @@
 
 ## 变更历史
 
+### 2026-04-22 - 子代理模型收口到 gpt-5.4
+
+**变更内容**: 将 commit skill 中所有需要子代理的路径统一限制为 `gpt-5.4`，并为非 `gpt-5.4` 场景补充串行 fallback 说明
+
+**变更理由**: 避免不同模型在 `spawn_agent` 行为上产生不一致，收紧多子代理触发边界
+
+**影响范围**: `skills/commit/SKILL.md`、`skills/commit/agents/openai.yaml`、`README.md`、`DESIGN.md`
+
+**决策依据**: 子代理只承担只读 facts 收集，限定到 `gpt-5.4` 可降低编排漂移并保留主线程兜底路径
+
 ### 2026-04-14 - 初始化 commit-skill 仓库骨架
 
 **变更内容**: 创建 README、DESIGN、marketplace.json 与 `skills/commit` 目录
@@ -85,6 +95,7 @@
 
 **决策依据**: 用 plan JSON 作为 AI 与脚本的协作中介，进一步减少 prompt 复杂度并提升可测试性
 - **恢复多子代理并行分析**：
-  - `plan` 产出多个 candidate 或 root + submodule 混合时，主线程 spawn explorer 子代理按 candidate/submodule 分头只读分析 facts
-  - 子代理仅允许 `git status --porcelain -z` / `git diff --name-status` / `git log -1` / `git submodule status`
+  - 仅当当前主模型为 `gpt-5.4`，且 `plan` 产出多个 candidate 或 root + submodule 混合时，主线程才 spawn explorer 子代理按 candidate/submodule 分头只读分析 facts
+  - 子代理固定 `model=gpt-5.4`，且仅允许 `git status --porcelain -z` / `git diff --name-status` / `git log -1` / `git submodule status`
+  - 非 `gpt-5.4` 模型统一退化为主线程串行采集 facts
   - 主线程汇总后更新 plan JSON，确保 AI 与 coverage/apply-plan 使用真实信息

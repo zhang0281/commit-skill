@@ -26,7 +26,7 @@ commit-skill/
 
 - **AI**：做语义拆分、残余提交裁决、中文提交信息生成
 - **脚本**：做 inventory、plan JSON、coverage audit、统一错误码、submodule 扫描、签名探测与真正的 `git commit`
-- **多子代理**：当 plan 产出多个候选 commit 或存在 submodule 与根仓混合改动时，主线程 spawn explorer 子代理按 candidate/submodule 并行只读收集 facts，再统一生成 plan JSON；主线程负责 coverage 与 apply-plan。
+- **多子代理**：仅当当前主模型为 `gpt-5.4`，且 plan 产出多个候选 commit 或存在 submodule 与根仓混合改动时，主线程才 spawn explorer 子代理按 candidate/submodule 并行只读收集 facts；否则退化为主线程串行收集。
 - **plan 默认 summary-only**：`plan` 自动先跑、输出 summary 供模型、同时写出完整 `/tmp/commit-plan.json` 供后续 `coverage`/`apply-plan`。
 
 ## 兼容性
@@ -42,16 +42,16 @@ commit-skill/
 3. `coverage --plan-file`：校验计划覆盖度
 4. `apply-plan --plan-file`：统一执行 commit
 
-## 多子代理并行分析
+## 多子代理并行分析（仅限 gpt-5.4）
 
-当 plan 产出多个 commit 条目或既有 submodule 又有根仓改动时，主线程会：
+当且仅当当前主模型为 `gpt-5.4`，且 plan 产出多个 commit 条目或既有 submodule 又有根仓改动时，主线程会：
 
-- `spawn_agent role=explorer`：按 candidate commit / submodule path 分派
+- `spawn_agent agent_type=explorer, model=gpt-5.4`：按 candidate commit / submodule path 分派
 - 子代理只读：`git status --porcelain -z`、`git diff --name-status`、`git log -1`、`git submodule status`
 - 子代理回报：files、sign hints、top-level group、submodule状态
 - 主线程汇总后更新 plan JSON，确保 coverage/execute 以真实 facts 运行
 
-此并行采集仅在 plan 阶段触发，后续的 coverage/apply-plan 仍在主线程执行。
+若当前模型不是 `gpt-5.4`，则禁止启用子代理，统一退化为主线程串行采集；后续的 coverage/apply-plan 仍在主线程执行。
 ## 脚本子命令
 
 - `inventory`：调试库存信息
