@@ -5,177 +5,87 @@ description: 拆分并创建规范 Git 提交。Use when Codex or Claude Code ne
 
 # Commit
 
-将执行 `$commit` 当下扫描到的改动快照，整理成一个或多个“每次只做一件事”的 Git 提交。
+将执行 `$commit` 当下扫描到的路径与内容快照，整理成一个或多个“每次只做一件事”的 Git 提交。
 
 ## 核心定位
 
-- **AI 负责**：语义拆分、标题与 bullets、残余提交裁决
-- **脚本负责**：inventory、plan JSON、签名探测、coverage audit、submodule 扫描、实际 `git add` / `git commit`
-- **默认流**：`plan` 自动先跑；用户可手动调用，但 `$commit` 本身也必须先调它
-- **铁律**：不改工作区文件内容、不做 partial staging、只处理本次 `$commit` 起手扫描到的改动快照
+- **AI 负责**：语义拆分、标题与 bullets、残余提交裁决。
+- **脚本负责**：inventory、plan JSON、coverage audit、submodule 扫描、签名探测与实际 `git add` / `git commit`。
+- **默认流**：`plan → 编辑 plan JSON → coverage → apply-plan`。
+- **铁律**：不改工作区文件内容、不做 partial staging、只处理本次 `$commit` 起手扫描到的路径与内容快照。
+- **并行默认**：多文件、多候选 commit 或多 repo/submodule 改动时，默认自动判断并启动只读子代理加速 facts 收集；不可用则串行退化。
 
-## 兼容性
-
-- **Codex**：通过 `agents/openai.yaml` 触发；执行 `scripts/commit_skill.py`
-- **Claude Code**：通过 `.claude-plugin/marketplace.json` 暴露 skill；执行同一份 `scripts/commit_skill.py`
-- 脚本仅依赖 Python stdlib + `git` / `gpg` / `gpgconf`，避免平台专属依赖
-
-## 使用方式
+## 使用方式与参数归一
 
 - `$commit`
-- `$commit 只提交 src/api.py 和 src/utils.py`
-- `$commit 不提交 docs`
-- `$commit 单次提交`
-- `$commit 分开提交`
-- `$commit 签名提交`
-- `$commit 不签名`
-
-## 边界归一
-
-- “只提交 xxx” → 仅处理指定文件/目录
-- “不提交 xxx” → 排除指定文件/目录
-- “单次提交” / “合并提交” → `split_mode=single`
-- “分开提交” → `split_mode=split`
-- “签名提交” / “启用 GPG” → `sign_mode=signed`
-- “不签名” / “禁用 GPG” → `sign_mode=unsigned`
+- `$commit 只提交 src/api.py 和 src/utils.py` → `--include`
+- `$commit 不提交 docs` → `--exclude`
+- `$commit 单次提交` / `$commit 合并提交` → `split_mode=single`
+- `$commit 分开提交` → `split_mode=split`
+- `$commit 签名提交` / `$commit 启用 GPG` → `sign_mode=signed`
+- `$commit 不签名` / `$commit 禁用 GPG` → `sign_mode=unsigned`
 - 未指定时：`split_mode=auto`、`sign_mode=auto`
+
+## 何时读取 references
+
+- 编辑或修复 plan JSON schema / coverage gaps / snapshot drift：读 `references/plan-schema.md`。
+- 签名、GPG、fallback、`sign_mode`：读 `references/signing.md`。
+- submodule internal / pointer、submodule include/exclude：读 `references/submodules.md`。
+- 非零错误码、`ok=false`、`passed=false`：读 `references/error-codes.md`。
+- 手动恢复、命令边界、staged cleanup：读 `references/safety.md`。
 
 ## 默认执行链
 
 ### 1) 自动先跑 `plan`
 
-`$commit` 默认在 root 仓后立即执行：
+```bash
+python3 scripts/commit_skill.py plan --repo . --summary-only
+```
+
+要点：
+
+- summary 返回 `plan_file`，完整计划默认写入 `/tmp/commit-plan-<repo_hash>.json`。
+- `coverage_baseline` 是本轮唯一路径与内容快照；后续新路径或同路径内容漂移，不得被顺带提交。
+- 若 `changed_count=0`，直接报告无可提交改动；`apply-plan` 可 no-op。
+
+### 2) AI 编辑 plan JSON
+
+AI 只做这些判断：
+
+1. 是否同一目的；是否拆成多个纯语义 commit。
+2. docs / tests / config 是否并入对应语义单元。
+3. 无法纯语义拆分时，降级为模块级或文件级 residual commit。
+4. 填写中文 Conventional Commit 的 `type` / `title` / `bullets`。
+
+不要手写 Git 命令；编辑 `commits` 列表。细则见 `references/plan-schema.md`。
+
+### 3) 默认自动并行 facts 收集
+
+满足任一条件即可启动只读 `explorer` 子代理：多个 candidate commit、root + submodule 混合、多个 repo_path、改动文件较多。
+
+子代理只读：`git status --porcelain -z` / `git diff --name-status` / `git log -1` / `git submodule status`。禁止写、禁止 `git add/commit/reset`。最终 plan 编辑、coverage 与 apply 仍在主线程执行。
+
+### 4) 执行前跑 coverage
 
 ```bash
-python3 scripts/commit_skill.py plan --repo . --out /tmp/commit-plan.json --summary-only
+python3 scripts/commit_skill.py coverage --plan-file /tmp/commit-plan-<repo_hash>.json --json
 ```
 
-`plan` 会在**第一时间**收集 facts、产出 summary-only JSON，并将完整 plan 写入 `/tmp/commit-plan.json`：
+若 `passed=false`：根据返回字段修 plan 或重跑 plan；不得把快照外路径捎带提交。错误字段说明见 `references/error-codes.md` 与 `references/plan-schema.md`。
 
-- inventory 收集（含 `git status --porcelain -z`）
-- submodule dirty / pointer / ahead 检测
-- sign_mode 探测（仅读取 Git config，推迟 GPG 探测至 later steps）
-- 路径分类与候选 `commit` 分组
-- 统一错误码输出
-- 同时生成供 AI 直接编辑的 **可编辑 plan JSON**
-
-此处有一条新约束：`plan` 产出的 `coverage_baseline` 就是本次 `$commit` 的**唯一提交快照**。后续即便工作区又出现新改动，`coverage` 与 `apply-plan` 也只认这份快照，不会重复扫描、也不会追着把“后来出现的改动”继续提交。
-
-### 2) AI 基于 plan JSON 做裁决
-
-AI 只做这些高价值判断：
-
-1. 这些候选分组是否服务于同一个目的
-2. 是否应拆成多个纯语义 commit
-3. 是否需要合并 docs / tests / config 到同一个语义单元
-4. 若无法纯语义拆分，降级为模块级或文件级 residual commit
-5. 填写中文 Conventional Commit 的 `type` / `title` / `bullets`
-
-AI 不应手写 Git 命令，而应编辑 plan JSON 的 `commits` 列表。
-
-### 多子代理并行分析（仅限 gpt-5.4）
-
-仅当**当前主模型为 `gpt-5.4`**，且 `plan` 发现多个候选 commit 或同时存在 root 仓与一个以上 submodule 的改动时，主线程才可启动 `explorer` 子代理；非 `gpt-5.4` 模型一律退化为主线程串行 fact-gathering，不得 `spawn_agent`。
-
-- 每个 candidate commit 或 submodule 分支都分配一个子代理，且固定 `model=gpt-5.4`，仅读对应 `paths` / `repo_path`
-- 子代理只运行 `git status --porcelain -z` / `git diff --name-status` / `git log -1` / `git submodule status`；禁止写、禁止 `git add/commit/reset`
-- 子代理返回：该 candidate 的实际 changed files、top-level grouping、sign hints、依赖 submodule 状态
-- 主线程在收集所有子代理汇报后更新 plan JSON，确保 commit candidates 与 submodule internal/pointer 条目都覆盖真实 facts
-- 多子代理仅用于 fact-gathering，最终 coverage 与 apply 仍在主线程执行
-
-这样确保大型仓在 plan 阶段就把 facts 并行拾起，再由 AI 编辑最终 plan JSON；若不满足 `gpt-5.4` 条件，则走串行路径，避免错误使用子代理。
-
-### 3) 执行前跑 coverage（仅校验本次快照）
-
-对最终 plan JSON 做覆盖校验：
+### 5) 最后用 `apply-plan` 落地
 
 ```bash
-python3 scripts/commit_skill.py coverage --plan-file /tmp/commit-plan.json --json
+python3 scripts/commit_skill.py apply-plan --plan-file /tmp/commit-plan-<repo_hash>.json --json
 ```
 
-若 `passed=false`：
-
-- 继续补**本次快照内**的 `commits`
-- 或在 `exclude` 中加入用户显式排除项
-- 直到本次快照中的 `uncovered` 归零
-
-若 plan 里混入了快照之外、执行 `$commit` 之后才出现的路径，coverage 也必须直接报错，而不是把它们捎带提交。
-
-### 4) 最后用 `apply-plan` 落地
-
-```bash
-python3 scripts/commit_skill.py apply-plan --plan-file /tmp/commit-plan.json --json
-```
-
-`apply-plan` 会：
-
-- 先复核 coverage
-- 逐个执行 commit（仅执行快照内路径）
-- 自动处理 `sign_mode`
-- 在 submodule 内部 repo 执行对应 commit
-- 再在父仓库执行 submodule pointer commit
-- 返回 SHA / signed / fallback / attempts / 错误码
-
-## 计划 JSON 结构
-
-`plan` 输出的是**可编辑计划**，核心字段：
-
-```json
-{
-  "schema_version": 1,
-  "repo": "/abs/repo",
-  "requested": {
-    "split_mode": "auto",
-    "sign_mode": "auto"
-  },
-  "sign_context": {},
-  "inventory": {},
-  "commits": [
-    {
-      "id": "repo:docs",
-      "repo_path": "/abs/repo",
-      "kind": "repo",
-      "paths": ["README.md"],
-      "type": "",
-      "title": "",
-      "bullets": [],
-      "type_hint": "docs",
-      "title_hint": "更新文档",
-      "bullet_hints": ["..."],
-      "sign_mode": "auto"
-    }
-  ],
-  "exclude": [],
-  "coverage_baseline": {}
-}
-```
-
-约束：
-
-- `type` 必须是 `feat|fix|docs|refactor|test|chore|style|perf`
-- `title` 必须非空
-- `bullets` 必须是字符串数组
-- `paths` 相对 `repo_path`
-- plan JSON 建议写到 `/tmp/commit-plan.json`，不要写回仓库工作区
-- `paths` 必须属于 `coverage_baseline` 记录的那次扫描快照；不得夹带之后新增的路径
+`apply-plan` 会先复核 coverage，再逐个提交快照内路径，处理签名与 submodule 顺序，并返回 SHA / signed / fallback / attempts / 错误码。
 
 ## 手动调试子命令
 
-### 仅看 inventory
-
 ```bash
 python3 scripts/commit_skill.py inventory --repo . --json
-```
-
-### 手动生成 plan JSON 文件
-
-```bash
-python3 scripts/commit_skill.py plan --repo . --json > /tmp/commit-plan.json
-```
-
-### 对单个 commit 直接执行（调试用途）
-
-```bash
+python3 scripts/commit_skill.py plan --repo . --out /tmp/commit-plan-<repo_hash>.json --json
 python3 scripts/commit_skill.py commit --repo . \
   --file src/api.py \
   --type fix \
@@ -184,88 +94,6 @@ python3 scripts/commit_skill.py commit --repo . \
   --sign-mode auto
 ```
 
-## 签名规则
-
-- `sign_mode=auto`：若探测到可用 GPG 私钥或 Git 已配置签名，则优先尝试 `git commit -S`
-- `sign_mode=signed`：强制 signed commit；失败即报错
-- `sign_mode=unsigned`：明确无签名提交
-- 若 `auto` 路径签名失败，且错误属于 `gpg-agent` / `pinentry` / `No agent running` / `failed to sign the data`，只允许**单次** fallback 到：
-
-```bash
-git -c commit.gpgsign=false commit ...
-```
-
-脚本会：
-
-- 若有 TTY，则设置 `GPG_TTY=$(tty)`
-- 尝试 `gpgconf --launch gpg-agent`
-- 探测 `gpg --list-secret-keys --keyid-format LONG`
-- 返回本次是否 signed / 是否发生 fallback / 最终 SHA
-
-## Submodule 规则
-
-`plan` 会显式产生两类 submodule commit：
-
-1. `submodule_internal`
-   - 在子模块仓库内提交 dirty files
-2. `submodule_pointer`
-   - 在父仓库提交 gitlink / pointer 更新
-
-AI 应遵循：
-
-- submodule internal commit 先于 pointer commit
-- pointer commit 可由多个子模块合并成一个 `chore`，但必须保持语义清楚
-
-## 统一错误码
-
-脚本所有子命令均返回结构化错误：
-
-- `OK=0`
-- `INVALID_ARGUMENT=10`
-- `NOT_GIT_REPO=11`
-- `PLAN_FILE_INVALID=12`
-- `GIT_STATUS_FAILED=20`
-- `GIT_DIFF_FAILED=21`
-- `GIT_ADD_FAILED=22`
-- `GIT_COMMIT_FAILED=23`
-- `COVERAGE_GAP=30`（含“计划未覆盖快照”与“计划混入快照外路径”）
-- `PLAN_APPLY_FAILED=31`
-- `GPG_REQUIRED_FAILED=40`
-- `GPG_AUTO_FAILED=41`
-- `SUBMODULE_SCAN_FAILED=50`
-
-## 安全边界
-
-仅允许脚本内部使用这些 Git/GPG 动作：
-
-- `git status`
-- `git diff`
-- `git diff --stat`
-- `git diff --name-status`
-- `git log`
-- `git config --get <key>`
-- `git add <file>`
-- `git commit -m`
-- `git commit -S -m`
-- `git -c commit.gpgsign=false commit -m`（仅 signed path 明确失败后的单次降级）
-- `git reset HEAD <file>`
-- `git submodule status`
-- `git submodule foreach`
-- `git -C /absolute/path ...`
-- `gpgconf --launch gpg-agent`
-- `gpg --list-secret-keys --keyid-format LONG`
-
-绝不做：
-
-- `git restore`
-- `git checkout -- <file>`
-- `git reset --hard|--mixed|--soft`
-- `git clean`
-- `git rm`
-- 任何 `--force` / `-f`
-- 永久关闭仓库或全局 GPG 签名
-- 工作区文件内容改写
-
 ## 输出要求
 
 最终回答保持：
@@ -273,5 +101,5 @@ AI 应遵循：
 - 【判词】一句话定性
 - 【斩链】概述改动、submodule 判断、提交计划、coverage audit、执行动作
 - 【验尸】commit SHA / 标题 / 文件 / 是否 signed / 是否 fallback
-- 【余劫】本次快照中剩余未提交项（仅允许显式排除）或失败点；快照之后新增的改动不计入本轮
+- 【余劫】本次快照中剩余未提交项（仅允许显式排除）、snapshot drift 或失败点；快照之后新增的改动不计入本轮
 - 【再斩】下一步
