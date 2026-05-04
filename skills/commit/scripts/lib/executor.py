@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .coverage import run_coverage_from_plan
+from .coverage import resolve_commit_paths, run_coverage_from_plan
 from .errors import ErrorCode, SkillError, ok_payload
 from .models import CommitPlan, CommitRun
 from .process import git
@@ -77,9 +77,24 @@ def apply_plan(plan: dict[str, object], sign_context: dict[str, object], sign_mo
         effective_mode = resolve_sign_mode(requested_mode, sign_context)
         if requested_mode == "auto":
             effective_mode = effective_global
+        resolved_files, invalid_paths = resolve_commit_paths(
+            plan,
+            str(commit_entry["repo_path"]),
+            [str(path) for path in commit_entry["paths"]],
+        )
+        if invalid_paths:
+            raise SkillError(
+                ErrorCode.COVERAGE_GAP,
+                "计划 JSON 包含快照之外的路径",
+                {
+                    "repo_path": commit_entry["repo_path"],
+                    "paths": commit_entry["paths"],
+                    "out_of_snapshot_paths": invalid_paths,
+                },
+            )
         commit_plan = CommitPlan(
             repo_path=str(commit_entry["repo_path"]),
-            files=[str(path) for path in commit_entry["paths"]],
+            files=resolved_files,
             commit_type=str(commit_entry["type"]),
             title=str(commit_entry["title"]),
             bullets=[str(item) for item in commit_entry.get("bullets", [])],

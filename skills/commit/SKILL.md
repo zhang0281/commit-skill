@@ -5,14 +5,14 @@ description: 拆分并创建规范 Git 提交。Use when Codex or Claude Code ne
 
 # Commit
 
-将当前仓库改动整理成一个或多个“每次只做一件事”的 Git 提交。
+将执行 `$commit` 当下扫描到的改动快照，整理成一个或多个“每次只做一件事”的 Git 提交。
 
 ## 核心定位
 
 - **AI 负责**：语义拆分、标题与 bullets、残余提交裁决
 - **脚本负责**：inventory、plan JSON、签名探测、coverage audit、submodule 扫描、实际 `git add` / `git commit`
 - **默认流**：`plan` 自动先跑；用户可手动调用，但 `$commit` 本身也必须先调它
-- **铁律**：不改工作区文件内容、不做 partial staging、不遗漏未显式排除的改动
+- **铁律**：不改工作区文件内容、不做 partial staging、只处理本次 `$commit` 起手扫描到的改动快照
 
 ## 兼容性
 
@@ -59,6 +59,8 @@ python3 scripts/commit_skill.py plan --repo . --out /tmp/commit-plan.json --summ
 - 统一错误码输出
 - 同时生成供 AI 直接编辑的 **可编辑 plan JSON**
 
+此处有一条新约束：`plan` 产出的 `coverage_baseline` 就是本次 `$commit` 的**唯一提交快照**。后续即便工作区又出现新改动，`coverage` 与 `apply-plan` 也只认这份快照，不会重复扫描、也不会追着把“后来出现的改动”继续提交。
+
 ### 2) AI 基于 plan JSON 做裁决
 
 AI 只做这些高价值判断：
@@ -83,7 +85,7 @@ AI 不应手写 Git 命令，而应编辑 plan JSON 的 `commits` 列表。
 
 这样确保大型仓在 plan 阶段就把 facts 并行拾起，再由 AI 编辑最终 plan JSON；若不满足 `gpt-5.4` 条件，则走串行路径，避免错误使用子代理。
 
-### 3) 执行前跑 coverage
+### 3) 执行前跑 coverage（仅校验本次快照）
 
 对最终 plan JSON 做覆盖校验：
 
@@ -93,9 +95,11 @@ python3 scripts/commit_skill.py coverage --plan-file /tmp/commit-plan.json --jso
 
 若 `passed=false`：
 
-- 继续补 `commits`
+- 继续补**本次快照内**的 `commits`
 - 或在 `exclude` 中加入用户显式排除项
-- 直到 `uncovered` 归零
+- 直到本次快照中的 `uncovered` 归零
+
+若 plan 里混入了快照之外、执行 `$commit` 之后才出现的路径，coverage 也必须直接报错，而不是把它们捎带提交。
 
 ### 4) 最后用 `apply-plan` 落地
 
@@ -106,7 +110,7 @@ python3 scripts/commit_skill.py apply-plan --plan-file /tmp/commit-plan.json --j
 `apply-plan` 会：
 
 - 先复核 coverage
-- 逐个执行 commit
+- 逐个执行 commit（仅执行快照内路径）
 - 自动处理 `sign_mode`
 - 在 submodule 内部 repo 执行对应 commit
 - 再在父仓库执行 submodule pointer commit
@@ -153,6 +157,7 @@ python3 scripts/commit_skill.py apply-plan --plan-file /tmp/commit-plan.json --j
 - `bullets` 必须是字符串数组
 - `paths` 相对 `repo_path`
 - plan JSON 建议写到 `/tmp/commit-plan.json`，不要写回仓库工作区
+- `paths` 必须属于 `coverage_baseline` 记录的那次扫描快照；不得夹带之后新增的路径
 
 ## 手动调试子命令
 
@@ -223,7 +228,7 @@ AI 应遵循：
 - `GIT_DIFF_FAILED=21`
 - `GIT_ADD_FAILED=22`
 - `GIT_COMMIT_FAILED=23`
-- `COVERAGE_GAP=30`
+- `COVERAGE_GAP=30`（含“计划未覆盖快照”与“计划混入快照外路径”）
 - `PLAN_APPLY_FAILED=31`
 - `GPG_REQUIRED_FAILED=40`
 - `GPG_AUTO_FAILED=41`
@@ -268,5 +273,5 @@ AI 应遵循：
 - 【判词】一句话定性
 - 【斩链】概述改动、submodule 判断、提交计划、coverage audit、执行动作
 - 【验尸】commit SHA / 标题 / 文件 / 是否 signed / 是否 fallback
-- 【余劫】剩余未提交项（仅允许显式排除）或失败点
+- 【余劫】本次快照中剩余未提交项（仅允许显式排除）或失败点；快照之后新增的改动不计入本轮
 - 【再斩】下一步

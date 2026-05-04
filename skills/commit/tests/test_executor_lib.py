@@ -103,9 +103,16 @@ class ExecutorLibTest(unittest.TestCase):
 
         good_plan = {"repo": "/repo", "requested": {"sign_mode": "auto"}, "commits": [{"id": "1", "repo_path": "/repo", "paths": ["a.py"], "type": "feat", "title": "x", "bullets": ["b"], "sign_mode": "auto"}]}
         with mock.patch.object(executor, "run_coverage_from_plan", return_value={"passed": True}), \
+             mock.patch.object(executor, "resolve_commit_paths", return_value=(["a.py"], [])), \
              mock.patch.object(executor, "resolve_sign_mode", side_effect=lambda mode, ctx: "signed" if mode == "auto" else mode), \
              mock.patch.object(executor, "run_commit", return_value=CommitRun(CmdResult([], 0, "done", ""), [{"command": []}], True, False)), \
              mock.patch.object(executor, "git", return_value=CmdResult([], 0, "deadbeef\n", "")):
             payload = executor.apply_plan(good_plan, {"suggested_sign_mode": "signed"})
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["results"][0]["sha"], "deadbeef")
+
+        with mock.patch.object(executor, "run_coverage_from_plan", return_value={"passed": True}), \
+             mock.patch.object(executor, "resolve_commit_paths", return_value=(["a.py"], ["later.py"])):
+            with self.assertRaises(SkillError) as ctx:
+                executor.apply_plan(good_plan, {"suggested_sign_mode": "signed"})
+            self.assertEqual(ctx.exception.code, ErrorCode.COVERAGE_GAP)

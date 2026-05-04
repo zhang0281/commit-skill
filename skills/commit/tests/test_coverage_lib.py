@@ -94,3 +94,34 @@ class CoverageLibTest(unittest.TestCase):
         }
         ok_gap = cov.run_coverage_from_plan(ok_plan)
         self.assertTrue(ok_gap["passed"])
+
+    def test_plan_paths_must_belong_to_initial_snapshot(self) -> None:
+        plan = {
+            "repo": "/repo",
+            "commits": [
+                {"repo_path": "/repo", "paths": ["a.py", "new.py"], "type": "feat", "title": "ok", "bullets": ["x"]},
+                {"repo_path": "/sub", "paths": ["m.py", "later.py"], "type": "chore", "title": "ok", "bullets": ["x"]},
+            ],
+            "exclude": [],
+            "coverage_baseline": {
+                "root_changed_files": ["a.py"],
+                "explicit_excluded_files": [],
+                "submodule_changes": [{"repo_path": "/sub", "submodule_path": "vendor/x", "changed_files": ["m.py"]}],
+                "required_pointer_updates": [{"submodule_path": "vendor/x"}],
+            },
+        }
+        root_paths, root_invalid = cov.collect_resolved_plan_paths(plan, "/repo")
+        self.assertEqual(root_paths, ["a.py"])
+        self.assertEqual(root_invalid, ["new.py"])
+
+        sub_paths, sub_invalid = cov.collect_resolved_plan_paths(plan, "/sub")
+        self.assertEqual(sub_paths, ["m.py"])
+        self.assertEqual(sub_invalid, ["later.py"])
+
+        gap = cov.run_coverage_from_plan(plan)
+        self.assertFalse(gap["passed"])
+        self.assertEqual(gap["out_of_snapshot_root_paths"], ["new.py"])
+        self.assertEqual(
+            gap["out_of_snapshot_submodule_paths"],
+            [{"repo_path": "/sub", "submodule_path": "vendor/x", "paths": ["later.py"]}],
+        )

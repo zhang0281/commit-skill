@@ -6,6 +6,7 @@
 - 保持与 cc-switch 技能发现 / 安装 / 更新流程兼容
 - 同时兼容 Codex 与 Claude Code
 - 通过 plan JSON + 多脚本架构，进一步降低 prompt token 消耗并提高维护性
+- 将 `$commit` 的提交边界固定为“启动时扫描到的改动快照”，避免执行期重复扫描直到全部提交
 
 ## 方案选择
 
@@ -47,13 +48,29 @@
    - `plan` 显式产生 `submodule_internal` 与 `submodule_pointer` 两类提交项
    - 让 AI 与执行器都能识别父仓库 / 子模块仓库的边界
 
+7. **固定单次快照边界**
+   - `plan` 生成的 `coverage_baseline` 即本次 `$commit` 唯一合法输入集合
+   - `coverage` 不仅检查“是否漏提”，还检查“是否夹带快照外路径”
+   - `apply-plan` 仅解析并提交快照内文件，不再重复扫描工作区以追赶后续新增改动
+
 ## 已知限制
 
 - 语义拆分仍依赖 AI 裁决，脚本只处理确定性逻辑
 - submodule merge 策略仍偏保守，默认先 internal 再 pointer
 - `sign-mode=auto` 在无 TTY 沙箱下可能探测不到完整 GPG 灵脉，但结构已允许 fallback
+- 若 `$commit` 执行过程中用户又修改了工作区，这些新改动将留待下一次 `$commit`，不会被本轮顺带吸入
 
 ## 变更历史
+
+### 2026-05-04 - 收紧为单次扫描快照提交
+
+**变更内容**: 将 coverage/apply-plan 改为只接受 `$commit` 起手时 `plan` 记录的快照路径；若计划混入快照外新路径则直接报错，并同步更新 skill 文档与 agent prompt
+
+**变更理由**: 前辈所求，是避免技能在执行期重复扫描并一路追到“全部提交”为止，改为仅提交本次调用时看到的变更
+
+**影响范围**: `skills/commit/scripts/lib/coverage.py`、`skills/commit/scripts/lib/executor.py`、`skills/commit/SKILL.md`、`skills/commit/agents/openai.yaml`、`README.md`、`DESIGN.md`、相关 tests
+
+**决策依据**: 以 `coverage_baseline` 作为不可漂移的事实快照，最能稳住提交边界，也最便于校验与解释
 
 ### 2026-04-22 - 子代理模型收口到 gpt-5.4
 

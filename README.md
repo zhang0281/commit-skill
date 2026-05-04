@@ -1,6 +1,6 @@
 # commit-skill
 
-用于托管 `commit` 技能的独立 GitHub 仓库。
+用于托管 `commit` 技能的独立 GitHub 仓库；现约束为**只提交执行 `$commit` 当下扫描到的改动快照**。
 
 ## 目录结构
 
@@ -28,6 +28,7 @@ commit-skill/
 - **脚本**：做 inventory、plan JSON、coverage audit、统一错误码、submodule 扫描、签名探测与真正的 `git commit`
 - **多子代理**：仅当当前主模型为 `gpt-5.4`，且 plan 产出多个候选 commit 或存在 submodule 与根仓混合改动时，主线程才 spawn explorer 子代理按 candidate/submodule 并行只读收集 facts；否则退化为主线程串行收集。
 - **plan 默认 summary-only**：`plan` 自动先跑、输出 summary 供模型、同时写出完整 `/tmp/commit-plan.json` 供后续 `coverage`/`apply-plan`。
+- **单次快照原则**：`coverage_baseline` 固定本轮 `$commit` 起手时的改动集；后续新改动不会被重复扫描或顺带提交。
 
 ## 兼容性
 
@@ -39,8 +40,8 @@ commit-skill/
 
 1. `plan --summary-only`：默认先写 summary 供 AI，完整计划存 `/tmp/commit-plan.json`
 2. AI 基于计划 JSON 做语义裁决，补全 `type/title/bullets`
-3. `coverage --plan-file`：校验计划覆盖度
-4. `apply-plan --plan-file`：统一执行 commit
+3. `coverage --plan-file`：仅校验本次快照覆盖度，并拒绝快照外路径
+4. `apply-plan --plan-file`：统一执行 commit，仅落地本次快照内改动
 
 ## 多子代理并行分析（仅限 gpt-5.4）
 

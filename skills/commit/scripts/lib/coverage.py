@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from .errors import ErrorCode, SkillError
-from .inventory import expand_targets
+from .inventory import expand_targets, matches_pattern
 
 ALLOWED_TYPES = {"feat", "fix", "docs", "refactor", "test", "chore", "style", "perf"}
 
@@ -79,6 +79,58 @@ def collect_plan_paths(plan: dict[str, object], repo_path: str) -> list[str]:
     return sorted(dict.fromkeys(collected))
 
 
+def allowed_root_snapshot_paths(plan: dict[str, object]) -> list[str]:
+    baseline = plan.get("coverage_baseline", {})
+    root_changed = [str(path) for path in baseline.get("root_changed_files", [])]
+    pointer_paths = [str(item["submodule_path"]) for item in baseline.get("required_pointer_updates", [])]
+    return sorted(dict.fromkeys(root_changed + pointer_paths))
+
+
+def allowed_submodule_snapshot_paths(plan: dict[str, object]) -> dict[str, list[str]]:
+    baseline = plan.get("coverage_baseline", {})
+    allowed: dict[str, list[str]] = {}
+    for entry in baseline.get("submodule_changes", []):
+        repo_path = str(entry["repo_path"])
+        allowed[repo_path] = [str(path) for path in entry.get("changed_files", [])]
+    return allowed
+
+
+def resolve_snapshot_paths(allowed_paths: list[str], requested_paths: list[str]) -> tuple[list[str], list[str]]:
+    resolved: list[str] = []
+    invalid: list[str] = []
+    for requested in requested_paths:
+        matched = [path for path in allowed_paths if matches_pattern(path, [requested])]
+        if matched:
+            resolved.extend(matched)
+            continue
+        invalid.append(requested)
+    return sorted(dict.fromkeys(resolved)), sorted(dict.fromkeys(invalid))
+
+
+def resolve_commit_paths(plan: dict[str, object], repo_path: str, requested_paths: list[str]) -> tuple[list[str], list[str]]:
+    plan_repo = str(plan["repo"])
+    if repo_path == plan_repo:
+        return resolve_snapshot_paths(allowed_root_snapshot_paths(plan), requested_paths)
+    allowed_map = allowed_submodule_snapshot_paths(plan)
+    return resolve_snapshot_paths(allowed_map.get(repo_path, []), requested_paths)
+
+
+def collect_resolved_plan_paths(plan: dict[str, object], repo_path: str) -> tuple[list[str], list[str]]:
+    resolved: list[str] = []
+    invalid: list[str] = []
+    for commit in plan["commits"]:
+        if commit["repo_path"] != repo_path:
+            continue
+        commit_resolved, commit_invalid = resolve_commit_paths(
+            plan,
+            repo_path,
+            [str(path) for path in commit["paths"]],
+        )
+        resolved.extend(commit_resolved)
+        invalid.extend(commit_invalid)
+    return sorted(dict.fromkeys(resolved)), sorted(dict.fromkeys(invalid))
+
+
 def run_coverage_from_args(changed: list[str], planned: list[str], exclude: list[str]) -> dict[str, object]:
     planned_files = expand_targets(changed, planned)
     excluded_files = expand_targets(changed, exclude)
@@ -97,15 +149,16 @@ def run_coverage_from_plan(plan: dict[str, object]) -> dict[str, object]:
     baseline = plan.get("coverage_baseline", {})
     root_changed = list(baseline.get("root_changed_files", []))
     explicit_excluded = list(baseline.get("explicit_excluded_files", []))
-    root_planned = expand_targets(root_changed, collect_plan_paths(plan, str(plan["repo"])))
+    root_planned, out_of_snapshot_root_paths = collect_resolved_plan_paths(plan, str(plan["repo"]))
     root_excluded = expand_targets(root_changed, explicit_excluded + list(plan.get("exclude", [])))
     root_uncovered = [path for path in root_changed if path not in set(root_planned + root_excluded)]
 
     submodule_uncovered: list[dict[str, object]] = []
+    out_of_snapshot_submodule_paths: list[dict[str, object]] = []
     for entry in baseline.get("submodule_changes", []):
         repo_path = entry["repo_path"]
         changed_files = list(entry.get("changed_files", []))
-        planned_files = expand_targets(changed_files, collect_plan_paths(plan, repo_path))
+        planned_files, invalid_paths = collect_resolved_plan_paths(plan, repo_path)
         uncovered = [path for path in changed_files if path not in planned_files]
         if uncovered:
             submodule_uncovered.append({
@@ -113,19 +166,33 @@ def run_coverage_from_plan(plan: dict[str, object]) -> dict[str, object]:
                 "submodule_path": entry.get("submodule_path", ""),
                 "uncovered_files": uncovered,
             })
+        if invalid_paths:
+            out_of_snapshot_submodule_paths.append({
+                "repo_path": repo_path,
+                "submodule_path": entry.get("submodule_path", ""),
+                "paths": invalid_paths,
+            })
 
     required_pointer_updates = [item["submodule_path"] for item in baseline.get("required_pointer_updates", [])]
-    pointer_planned = collect_plan_paths(plan, str(plan["repo"]))
+    pointer_planned = root_planned
     missing_pointer_updates = [path for path in required_pointer_updates if path not in pointer_planned]
 
-    passed = not root_uncovered and not submodule_uncovered and not missing_pointer_updates
+    passed = (
+        not root_uncovered
+        and not submodule_uncovered
+        and not missing_pointer_updates
+        and not out_of_snapshot_root_paths
+        and not out_of_snapshot_submodule_paths
+    )
     return {
         "repo": plan["repo"],
         "root_changed_files": root_changed,
         "planned_root_files": root_planned,
         "excluded_root_files": root_excluded,
         "root_uncovered_files": root_uncovered,
+        "out_of_snapshot_root_paths": out_of_snapshot_root_paths,
         "submodule_uncovered": submodule_uncovered,
+        "out_of_snapshot_submodule_paths": out_of_snapshot_submodule_paths,
         "missing_pointer_updates": missing_pointer_updates,
         "passed": passed,
     }
