@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import os
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -143,11 +145,12 @@ def parse_status(repo: str) -> list[dict[str, str]]:
         if not first_path:
             continue
         path = first_path
+        entry = {"status": status, "path": path, "category": classify_path(path)}
         if status[0] in {"R", "C"}:
             second_path, index = _read_null_terminated(data, index)
             if second_path:
-                path = second_path
-        entries.append({"status": status, "path": path, "category": classify_path(path)})
+                entry["old_path"] = second_path
+        entries.append(entry)
     return entries
 
 
@@ -316,6 +319,75 @@ def collect_submodules(repo: str, status_entries: list[dict[str, str]] | None = 
     ]
 
 
+def file_fingerprint(repo: str, path: str) -> dict[str, object]:
+    full_path = Path(repo, path)
+    normalized = path.replace("\\", "/")
+    if not os.path.lexists(full_path):
+        return {"path": normalized, "exists": False, "kind": "missing", "sha256": "", "target": ""}
+    if full_path.is_symlink():
+        target = os.readlink(full_path)
+        digest = hashlib.sha256(target.encode("utf-8", "surrogateescape")).hexdigest()
+        return {"path": normalized, "exists": True, "kind": "symlink", "sha256": digest, "target": target}
+    if full_path.is_file():
+        digest = hashlib.sha256()
+        with full_path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return {"path": normalized, "exists": True, "kind": "file", "sha256": digest.hexdigest(), "target": ""}
+    if full_path.is_dir():
+        return {"path": normalized, "exists": True, "kind": "directory", "sha256": "", "target": ""}
+    return {"path": normalized, "exists": True, "kind": "other", "sha256": "", "target": ""}
+
+
+def fingerprint_paths(repo: str, paths: list[str]) -> list[dict[str, object]]:
+    return [file_fingerprint(repo, path) for path in sorted(dict.fromkeys(paths))]
+
+
+def _submodule_pattern_matches(submodule_path: str, inner_path: str, patterns: list[str]) -> bool:
+    full_path = f"{submodule_path}/{inner_path}" if inner_path else submodule_path
+    return matches_pattern(submodule_path, patterns) or matches_pattern(full_path, patterns) or bool(inner_path and matches_pattern(inner_path, patterns))
+
+
+def _filter_submodule_dirty_files(submodule_path: str, dirty_files: list[str], includes: list[str], excludes: list[str]) -> tuple[list[str], list[str]]:
+    included = [
+        path
+        for path in dirty_files
+        if not includes or _submodule_pattern_matches(submodule_path, path, includes)
+    ]
+    excluded = [path for path in included if _submodule_pattern_matches(submodule_path, path, excludes)]
+    filtered = [path for path in included if path not in excluded]
+    return sorted(filtered), sorted(excluded)
+
+
+def filter_submodules(submodules: list[dict[str, object]], includes: list[str], excludes: list[str]) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    filtered: list[dict[str, object]] = []
+    excluded_records: list[dict[str, object]] = []
+    for submodule in submodules:
+        path = str(submodule["path"])
+        whole_included = not includes or matches_pattern(path, includes)
+        whole_excluded = matches_pattern(path, excludes)
+        dirty_files = [str(item) for item in submodule.get("dirty_files", [])]
+        kept_dirty, excluded_dirty = _filter_submodule_dirty_files(path, dirty_files, includes, excludes)
+        has_pointer_or_ahead = bool(submodule.get("pointer_changed")) or bool(submodule.get("ahead_commits"))
+        keep_pointer = has_pointer_or_ahead and whole_included and not whole_excluded
+        if whole_excluded:
+            excluded_records.append({"path": path, "dirty_files": dirty_files, "pointer": has_pointer_or_ahead})
+            continue
+        if not kept_dirty and not keep_pointer:
+            if dirty_files or has_pointer_or_ahead:
+                excluded_records.append({"path": path, "dirty_files": excluded_dirty or dirty_files, "pointer": has_pointer_or_ahead})
+            continue
+        record = dict(submodule)
+        record["dirty_files"] = kept_dirty
+        record["dirty_status"] = [entry for entry in submodule.get("dirty_status", []) if entry.get("path") in kept_dirty]
+        record["dirty"] = bool(kept_dirty)
+        record["requires_pointer_update"] = bool(kept_dirty) or keep_pointer
+        if excluded_dirty:
+            record["excluded_dirty_files"] = excluded_dirty
+        filtered.append(record)
+    return filtered, excluded_records
+
+
 def build_inventory(
     repo: str,
     includes: list[str],
@@ -329,9 +401,10 @@ def build_inventory(
     changed_files = sorted({entry["path"] for entry in status_entries})
     filtered, explicit_excluded = filtered_paths(changed_files, includes, excludes)
     sign_context = peek_signing(repo, sign_mode if sign_mode != "auto" else None) if lazy_signing else detect_signing(repo, sign_mode if sign_mode != "auto" else None)
-    submodules = collect_submodules(repo, status_entries=status_entries)
-    submodule_paths = {entry["path"] for entry in submodules}
-    root_changed_files = [path for path in filtered if path not in submodule_paths]
+    all_submodules = collect_submodules(repo, status_entries=status_entries)
+    submodules, excluded_submodules = filter_submodules(all_submodules, includes, excludes)
+    all_submodule_paths = {entry["path"] for entry in all_submodules}
+    root_changed_files = [path for path in filtered if path not in all_submodule_paths]
     categories = {
         "docs": [path for path in root_changed_files if classify_path(path) == "docs"],
         "tests": [path for path in root_changed_files if classify_path(path) == "tests"],
@@ -352,5 +425,6 @@ def build_inventory(
         "categories": categories,
         "status": status_entries,
         "submodules": submodules,
+        "excluded_submodules": excluded_submodules,
         "sign_context": sign_context,
     }

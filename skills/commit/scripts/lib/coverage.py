@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from .errors import ErrorCode, SkillError
-from .inventory import expand_targets, matches_pattern
+from .inventory import expand_targets, file_fingerprint, matches_pattern
 
 ALLOWED_TYPES = {"feat", "fix", "docs", "refactor", "test", "chore", "style", "perf"}
 
@@ -52,6 +52,9 @@ def validate_commit_entry(commit: object, require_messages: bool) -> None:
         raise SkillError(ErrorCode.PLAN_FILE_INVALID, "commits 条目必须为对象")
     require_non_empty_str(commit, "repo_path")
     require_non_empty_list(commit, "paths")
+    kind = commit.get("kind", "repo")
+    if kind not in {"repo", "submodule_internal", "submodule_pointer"}:
+        raise SkillError(ErrorCode.PLAN_FILE_INVALID, "commit kind 非法", {"commit": commit})
     if require_messages:
         validate_message_fields(commit)
 
@@ -61,14 +64,88 @@ def validate_plan_file(data: dict[str, object], require_messages: bool) -> dict[
     if not isinstance(repo, str) or not repo:
         raise SkillError(ErrorCode.PLAN_FILE_INVALID, "计划 JSON 缺少 repo")
     commits = data.get("commits")
-    if not isinstance(commits, list) or not commits:
+    if not isinstance(commits, list):
         raise SkillError(ErrorCode.PLAN_FILE_INVALID, "计划 JSON 缺少 commits 列表")
     for commit in commits:
         validate_commit_entry(commit, require_messages=require_messages)
     exclude = data.get("exclude", [])
     if not isinstance(exclude, list):
         raise SkillError(ErrorCode.PLAN_FILE_INVALID, "exclude 必须为数组")
+    validate_repo_paths(data)
+    validate_commit_path_uniqueness_and_order(data)
     return data
+
+
+def allowed_repo_paths(plan: dict[str, object]) -> set[str]:
+    allowed = {str(plan["repo"])}
+    baseline = plan.get("coverage_baseline", {})
+    for entry in baseline.get("submodule_changes", []):
+        allowed.add(str(entry["repo_path"]))
+    return allowed
+
+
+def validate_repo_paths(plan: dict[str, object]) -> None:
+    allowed = allowed_repo_paths(plan)
+    invalid = [str(commit["repo_path"]) for commit in plan.get("commits", []) if str(commit["repo_path"]) not in allowed]
+    if invalid:
+        raise SkillError(ErrorCode.PLAN_FILE_INVALID, "commit repo_path 不属于本次快照允许仓库", {"invalid_repo_paths": sorted(set(invalid)), "allowed_repo_paths": sorted(allowed)})
+
+
+def validate_commit_path_uniqueness_and_order(plan: dict[str, object]) -> None:
+    seen: set[tuple[str, str]] = set()
+    duplicates: list[dict[str, str]] = []
+    internal_seen: set[str] = set()
+    pointer_before_internal: list[str] = []
+    dirty_submodules = {str(entry.get("submodule_path", "")) for entry in plan.get("coverage_baseline", {}).get("submodule_changes", [])}
+    for commit in plan.get("commits", []):
+        repo_path = str(commit["repo_path"])
+        for path in commit["paths"]:
+            key = (repo_path, str(path))
+            if key in seen:
+                duplicates.append({"repo_path": repo_path, "path": str(path)})
+            seen.add(key)
+        kind = commit.get("kind", "repo")
+        if kind == "submodule_internal":
+            submodule_path = str(commit.get("submodule_path") or str(commit.get("id", "")).removeprefix("submodule-internal:"))
+            internal_seen.add(submodule_path)
+        if kind == "submodule_pointer":
+            for path in commit["paths"]:
+                path_str = str(path)
+                if path_str in dirty_submodules and path_str not in internal_seen:
+                    pointer_before_internal.append(path_str)
+    if duplicates:
+        raise SkillError(ErrorCode.PLAN_FILE_INVALID, "同一路径不可出现在多个 commit 中", {"duplicates": duplicates})
+    if pointer_before_internal:
+        raise SkillError(ErrorCode.PLAN_FILE_INVALID, "submodule pointer commit 必须晚于 internal commit", {"submodules": sorted(set(pointer_before_internal))})
+
+
+def current_fingerprint_map(repo_path: str, paths: list[str]) -> dict[str, dict[str, object]]:
+    return {item["path"]: item for item in [file_fingerprint(repo_path, path) for path in paths]}
+
+
+def fingerprint_drift(expected: list[dict[str, object]], current: dict[str, dict[str, object]]) -> list[dict[str, object]]:
+    drift: list[dict[str, object]] = []
+    for item in expected:
+        path = str(item.get("path", ""))
+        now = current.get(path)
+        if now != item:
+            drift.append({"path": path, "expected": item, "current": now})
+    return drift
+
+
+def collect_snapshot_drift(plan: dict[str, object]) -> dict[str, object]:
+    baseline = plan.get("coverage_baseline", {})
+    root_expected = [item for item in baseline.get("root_fingerprints", []) if str(item.get("path", "")) in set(baseline.get("root_changed_files", []))]
+    root_current = current_fingerprint_map(str(plan["repo"]), [str(item.get("path", "")) for item in root_expected])
+    root_drift = fingerprint_drift(root_expected, root_current)
+    submodule_drift: list[dict[str, object]] = []
+    for entry in baseline.get("submodule_changes", []):
+        expected = list(entry.get("fingerprints", []))
+        current = current_fingerprint_map(str(entry["repo_path"]), [str(item.get("path", "")) for item in expected])
+        drift = fingerprint_drift(expected, current)
+        if drift:
+            submodule_drift.append({"repo_path": entry["repo_path"], "submodule_path": entry.get("submodule_path", ""), "drift": drift})
+    return {"root_drift": root_drift, "submodule_drift": submodule_drift}
 
 
 def collect_plan_paths(plan: dict[str, object], repo_path: str) -> list[str]:
@@ -177,12 +254,15 @@ def run_coverage_from_plan(plan: dict[str, object]) -> dict[str, object]:
     pointer_planned = root_planned
     missing_pointer_updates = [path for path in required_pointer_updates if path not in pointer_planned]
 
+    drift = collect_snapshot_drift(plan)
     passed = (
         not root_uncovered
         and not submodule_uncovered
         and not missing_pointer_updates
         and not out_of_snapshot_root_paths
         and not out_of_snapshot_submodule_paths
+        and not drift["root_drift"]
+        and not drift["submodule_drift"]
     )
     return {
         "repo": plan["repo"],
@@ -194,5 +274,6 @@ def run_coverage_from_plan(plan: dict[str, object]) -> dict[str, object]:
         "submodule_uncovered": submodule_uncovered,
         "out_of_snapshot_submodule_paths": out_of_snapshot_submodule_paths,
         "missing_pointer_updates": missing_pointer_updates,
+        "snapshot_drift": drift,
         "passed": passed,
     }

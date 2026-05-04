@@ -125,3 +125,57 @@ class CoverageLibTest(unittest.TestCase):
             gap["out_of_snapshot_submodule_paths"],
             [{"repo_path": "/sub", "submodule_path": "vendor/x", "paths": ["later.py"]}],
         )
+
+    def test_validate_repo_paths_duplicates_order_and_snapshot_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td)
+            (repo / "a.py").write_text("one\n", encoding="utf-8")
+            fp = cov.file_fingerprint(str(repo), "a.py")
+            base = {
+                "repo": str(repo),
+                "commits": [{"repo_path": str(repo), "paths": ["a.py"], "kind": "repo", "type": "feat", "title": "ok", "bullets": []}],
+                "exclude": [],
+                "coverage_baseline": {
+                    "root_changed_files": ["a.py"],
+                    "root_fingerprints": [fp],
+                    "explicit_excluded_files": [],
+                    "submodule_changes": [],
+                    "required_pointer_updates": [],
+                },
+            }
+            self.assertTrue(cov.run_coverage_from_plan(base)["passed"])
+            (repo / "a.py").write_text("two\n", encoding="utf-8")
+            drift = cov.run_coverage_from_plan(base)
+            self.assertFalse(drift["passed"])
+            self.assertEqual(drift["snapshot_drift"]["root_drift"][0]["path"], "a.py")
+
+        bad_repo = dict(base)
+        bad_repo["commits"] = [{"repo_path": "/elsewhere", "paths": ["a.py"], "kind": "repo"}]
+        with self.assertRaises(SkillError):
+            cov.validate_plan_file(bad_repo, require_messages=False)
+
+        dup = dict(base)
+        dup["commits"] = [
+            {"repo_path": str(repo), "paths": ["a.py"], "kind": "repo"},
+            {"repo_path": str(repo), "paths": ["a.py"], "kind": "repo"},
+        ]
+        with self.assertRaises(SkillError):
+            cov.validate_plan_file(dup, require_messages=False)
+
+        wrong_order = {
+            "repo": "/repo",
+            "commits": [
+                {"id": "submodule-pointer:vendor/x", "repo_path": "/repo", "paths": ["vendor/x"], "kind": "submodule_pointer"},
+                {"id": "submodule-internal:vendor/x", "repo_path": "/repo/vendor/x", "paths": ["m.py"], "kind": "submodule_internal"},
+            ],
+            "exclude": [],
+            "coverage_baseline": {
+                "root_changed_files": [],
+                "explicit_excluded_files": [],
+                "submodule_changes": [{"repo_path": "/repo/vendor/x", "submodule_path": "vendor/x", "changed_files": ["m.py"]}],
+                "required_pointer_updates": [{"submodule_path": "vendor/x"}],
+            },
+        }
+        with self.assertRaises(SkillError):
+            cov.validate_plan_file(wrong_order, require_messages=False)
+

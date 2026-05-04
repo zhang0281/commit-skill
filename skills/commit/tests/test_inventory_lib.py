@@ -29,6 +29,13 @@ class InventoryLibTest(unittest.TestCase):
         self.assertEqual(excluded, [])
         self.assertEqual(inventory.top_level_groups(["README.md", "src/a.py"]), {".": ["README.md"], "src": ["src/a.py"]})
         self.assertEqual(inventory.expand_targets(["src/a.py"], ["src", "none.txt"]), ["none.txt", "src/a.py"])
+        submodules = [{"path": "vendor/sub", "dirty_files": ["inner.py", "docs/readme.md"], "dirty_status": [{"path": "inner.py"}, {"path": "docs/readme.md"}], "dirty": True, "pointer_changed": False, "ahead_commits": [], "requires_pointer_update": True}]
+        kept, excluded = inventory.filter_submodules(submodules, ["vendor/sub/inner.py"], [])
+        self.assertEqual(kept[0]["dirty_files"], ["inner.py"])
+        self.assertEqual(excluded, [])
+        kept2, excluded2 = inventory.filter_submodules(submodules, [], ["vendor/sub"])
+        self.assertEqual(kept2, [])
+        self.assertEqual(excluded2[0]["path"], "vendor/sub")
 
     def test_parse_helpers(self) -> None:
         entries = inventory.parse_status_lines(["", "R  old.py -> new.py"])
@@ -42,12 +49,14 @@ class InventoryLibTest(unittest.TestCase):
         self.assertEqual(inventory._read_null_terminated("abc", 0), ("abc", 3))
 
     def test_parse_status_porcelain_z_branches(self) -> None:
-        payload = "?? foo.py\0R  old.py\0new.py\0C  old2.py\0new2.py\0?? \0M "
+        payload = "?? foo.py\0R  new.py\0old.py\0C  new2.py\0old2.py\0?? \0M "
         with mock.patch.object(inventory, "git", return_value=CmdResult([], 0, payload, "")):
             entries = inventory.parse_status("/repo")
         self.assertEqual(entries[0]["path"], "foo.py")
         self.assertEqual(entries[1]["path"], "new.py")
+        self.assertEqual(entries[1]["old_path"], "old.py")
         self.assertEqual(entries[2]["path"], "new2.py")
+        self.assertEqual(entries[2]["old_path"], "old2.py")
 
         payload2 = "R  old.py\0\0"
         with mock.patch.object(inventory, "git", return_value=CmdResult([], 0, payload2, "")):

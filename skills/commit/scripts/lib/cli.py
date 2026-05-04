@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import tempfile
 from pathlib import Path
 
 from .coverage import load_plan_file, run_coverage_from_args, run_coverage_from_plan, validate_plan_file
 from .errors import ErrorCode, SkillError, error_payload, ok_payload
 from .executor import apply_plan
-from .inventory import build_inventory, changed_file_paths, expand_targets
+from .inventory import build_inventory, changed_file_paths, expand_targets, fingerprint_paths
 from .planner import build_plan
 from .process import repo_root
 from .signing import detect_signing
@@ -24,6 +26,11 @@ def write_json_file(payload: dict[str, object], out_path: str | None) -> None:
     if not out_path:
         return
     Path(out_path).write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def default_plan_file(repo: str) -> str:
+    repo_hash = hashlib.sha256(repo.encode("utf-8", "surrogateescape")).hexdigest()[:12]
+    return str(Path(tempfile.gettempdir(), f"commit-plan-{repo_hash}.json"))
 
 
 def plan_summary(plan_payload: dict[str, object], plan_file: str | None = None) -> dict[str, object]:
@@ -69,6 +76,7 @@ def command_inventory(args: argparse.Namespace) -> int:
 
 def command_plan(args: argparse.Namespace) -> int:
     repo = repo_root(args.repo)
+    plan_file = args.out or default_plan_file(repo)
     full_payload = ok_payload(
         **build_plan(
             repo,
@@ -79,11 +87,11 @@ def command_plan(args: argparse.Namespace) -> int:
             lazy_signing=True,
         )
     )
-    write_json_file(full_payload, args.out)
+    write_json_file(full_payload, plan_file)
     if getattr(args, "summary_only", False):
-        maybe_write_output(plan_summary(full_payload, args.out), None)
+        maybe_write_output(plan_summary(full_payload, plan_file), None)
         return 0
-    maybe_write_output(full_payload, args.out)
+    maybe_write_output(full_payload, None)
     return 0
 
 
@@ -134,6 +142,7 @@ def build_manual_commit_plan(repo: str, args: argparse.Namespace) -> dict[str, o
         ],
         "coverage_baseline": {
             "root_changed_files": files,
+            "root_fingerprints": fingerprint_paths(repo, files),
             "explicit_excluded_files": [],
             "submodule_changes": [],
             "required_pointer_updates": [],

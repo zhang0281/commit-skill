@@ -95,6 +95,16 @@ class ExecutorLibTest(unittest.TestCase):
             run = executor.run_commit(self.plan)
             self.assertTrue(run.signed)
 
+        self.plan.effective_sign_mode = "unsigned"
+        with mock.patch.object(executor, "current_env", return_value={}), \
+             mock.patch.object(executor, "stage_files"), \
+             mock.patch.object(executor, "unsigned_commit", side_effect=SkillError(ErrorCode.GIT_COMMIT_FAILED, "boom", {"attempts": []})), \
+             mock.patch.object(executor, "unstage_files", return_value=CmdResult([], 0, "", "")) as unstage:
+            with self.assertRaises(SkillError) as ctx:
+                executor.run_commit(self.plan)
+            self.assertEqual(ctx.exception.details["unstage_attempt"]["returncode"], 0)
+            unstage.assert_called_once()
+
         bad_plan = {"repo": "/repo"}
         with mock.patch.object(executor, "run_coverage_from_plan", return_value={"passed": False}):
             with self.assertRaises(SkillError) as ctx:
@@ -110,6 +120,11 @@ class ExecutorLibTest(unittest.TestCase):
             payload = executor.apply_plan(good_plan, {"suggested_sign_mode": "signed"})
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["results"][0]["sha"], "deadbeef")
+
+        with mock.patch.object(executor, "run_coverage_from_plan", return_value={"passed": True}), \
+             mock.patch.object(executor, "resolve_sign_mode", return_value="unsigned"):
+            payload = executor.apply_plan({"repo": "/repo", "requested": {"sign_mode": "unsigned"}, "commits": []}, {"suggested_sign_mode": "unsigned"})
+            self.assertTrue(payload["noop"])
 
         with mock.patch.object(executor, "run_coverage_from_plan", return_value={"passed": True}), \
              mock.patch.object(executor, "resolve_commit_paths", return_value=(["a.py"], ["later.py"])):

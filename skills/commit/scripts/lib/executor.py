@@ -15,6 +15,12 @@ def stage_files(plan: CommitPlan, env: dict[str, str]):
     raise SkillError(ErrorCode.GIT_ADD_FAILED, result.stderr.strip() or "git add 失败", details)
 
 
+def unstage_files(plan: CommitPlan, env: dict[str, str]):
+    if not plan.files:
+        return None
+    return git(plan.repo_path, "reset", "HEAD", "--", *plan.files, env=env)
+
+
 def commit_attempt(plan: CommitPlan, env: dict[str, str], mode: str):
     cmd = ["commit", *plan.message_args]
     if mode == "signed":
@@ -59,9 +65,20 @@ def signed_commit(plan: CommitPlan, env: dict[str, str]) -> CommitRun:
 def run_commit(plan: CommitPlan) -> CommitRun:
     env = current_env()
     stage_files(plan, env)
-    if plan.effective_sign_mode == "signed":
-        return signed_commit(plan, env)
-    return unsigned_commit(plan, env)
+    try:
+        if plan.effective_sign_mode == "signed":
+            return signed_commit(plan, env)
+        return unsigned_commit(plan, env)
+    except SkillError as exc:
+        reset = unstage_files(plan, env)
+        if reset is not None:
+            details = dict(exc.details or {})
+            details["unstage_attempt"] = {
+                "returncode": reset.returncode,
+                "stderr": reset.stderr.strip(),
+            }
+            exc.details = details
+        raise
 
 
 def apply_plan(plan: dict[str, object], sign_context: dict[str, object], sign_mode_override: str | None = None) -> dict[str, object]:
@@ -72,6 +89,8 @@ def apply_plan(plan: dict[str, object], sign_context: dict[str, object], sign_mo
     requested = sign_mode_override or str(plan.get("requested", {}).get("sign_mode", "auto"))
     effective_global = resolve_sign_mode(requested, sign_context)
     results: list[dict[str, object]] = []
+    if not plan.get("commits"):
+        return ok_payload(repo=plan["repo"], sign_mode=requested, effective_sign_mode=effective_global, results=[], noop=True)
     for commit_entry in plan["commits"]:
         requested_mode = str(commit_entry.get("sign_mode") or requested)
         effective_mode = resolve_sign_mode(requested_mode, sign_context)

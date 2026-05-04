@@ -27,6 +27,8 @@ class CliLibTest(unittest.TestCase):
             cli.write_json_file({"x": 1}, str(out))
             self.assertEqual(json.loads(out.read_text(encoding="utf-8")), {"x": 1})
             cli.write_json_file({"x": 2}, None)
+            self.assertIn("commit-plan-", cli.default_plan_file("/repo/path"))
+            self.assertEqual(cli.default_plan_file("/repo/path"), cli.default_plan_file("/repo/path"))
         parser = cli.build_parser()
         args = parser.parse_args(["inventory", "--repo", "/tmp/x"])
         self.assertEqual(args.command, "inventory")

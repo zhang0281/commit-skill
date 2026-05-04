@@ -51,3 +51,16 @@ class SubmodulePlanTest(unittest.TestCase):
         kinds = {item["kind"] for item in payload["commits"]}
         self.assertIn("submodule_internal", kinds)
         self.assertIn("submodule_pointer", kinds)
+
+    def test_exclude_submodule_path(self) -> None:
+        result = subprocess.run(
+            ["python3", "-B", str(SCRIPT), "plan", "--repo", str(self.parent), "--exclude", "vendor/child", "--json"],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertEqual(payload["commits"], [])
+        self.assertEqual(payload["coverage_baseline"]["submodule_changes"], [])
+        self.assertEqual(payload["coverage_baseline"]["required_pointer_updates"], [])
+        self.assertEqual(payload["coverage_baseline"]["excluded_submodules"][0]["path"], "vendor/child")
