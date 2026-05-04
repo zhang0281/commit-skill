@@ -15,6 +15,16 @@ description: 拆分并创建规范 Git 提交。Use when Codex or Claude Code ne
 - **铁律**：不改工作区文件内容、不做 partial staging、只处理本次 `$commit` 起手扫描到的路径与内容快照。
 - **并行默认**：多文件、多候选 commit 或多 repo/submodule 改动时，默认自动判断并启动只读子代理加速 facts 收集；不可用则串行退化。
 
+## 资源路径解析（防止误找项目目录）
+
+执行任何 `scripts/` 或读取 `references/` 前，先把**本 skill 根目录**解析成绝对路径，并在命令中使用该绝对路径：
+
+- `COMMIT_SKILL_DIR` = 当前 `SKILL.md` 所在目录的绝对路径（来自已加载的 skill path 或实际打开的 `SKILL.md` 文件路径）。
+- `COMMIT_SKILL_SCRIPT="$COMMIT_SKILL_DIR/scripts/commit_skill.py"`。
+- 不要写死某台机器上的安装路径；不要假定 `scripts/commit_skill.py` 位于启动 Codex 的项目目录。
+- 启动 Codex 的项目目录只作为目标仓库传给 `--repo`，例如在任意 repo 内执行时仍使用 `--repo .`。
+- 若向用户说明执行细节，须注明调用的 Python 脚本位于 commit skill 安装目录下，而非当前项目目录；涉及脚本或 reference 文件时尽量给出已解析后的完整路径。
+
 ## 使用方式与参数归一
 
 - `$commit`
@@ -39,7 +49,7 @@ description: 拆分并创建规范 Git 提交。Use when Codex or Claude Code ne
 ### 1) 自动先跑 `plan`
 
 ```bash
-python3 scripts/commit_skill.py plan --repo . --summary-only
+python3 "$COMMIT_SKILL_SCRIPT" plan --repo . --summary-only
 ```
 
 要点：
@@ -68,7 +78,7 @@ AI 只做这些判断：
 ### 4) 执行前跑 coverage
 
 ```bash
-python3 scripts/commit_skill.py coverage --plan-file /tmp/commit-plan-<repo_hash>.json --json
+python3 "$COMMIT_SKILL_SCRIPT" coverage --plan-file /tmp/commit-plan-<repo_hash>.json --json
 ```
 
 若 `passed=false`：根据返回字段修 plan 或重跑 plan；不得把快照外路径捎带提交。错误字段说明见 `references/error-codes.md` 与 `references/plan-schema.md`。
@@ -76,7 +86,7 @@ python3 scripts/commit_skill.py coverage --plan-file /tmp/commit-plan-<repo_hash
 ### 5) 最后用 `apply-plan` 落地
 
 ```bash
-python3 scripts/commit_skill.py apply-plan --plan-file /tmp/commit-plan-<repo_hash>.json --json
+python3 "$COMMIT_SKILL_SCRIPT" apply-plan --plan-file /tmp/commit-plan-<repo_hash>.json --json
 ```
 
 `apply-plan` 会先复核 coverage，再逐个提交快照内路径，处理签名与 submodule 顺序，并返回 SHA / signed / fallback / attempts / 错误码。
@@ -84,9 +94,9 @@ python3 scripts/commit_skill.py apply-plan --plan-file /tmp/commit-plan-<repo_ha
 ## 手动调试子命令
 
 ```bash
-python3 scripts/commit_skill.py inventory --repo . --json
-python3 scripts/commit_skill.py plan --repo . --out /tmp/commit-plan-<repo_hash>.json --json
-python3 scripts/commit_skill.py commit --repo . \
+python3 "$COMMIT_SKILL_SCRIPT" inventory --repo . --json
+python3 "$COMMIT_SKILL_SCRIPT" plan --repo . --out /tmp/commit-plan-<repo_hash>.json --json
+python3 "$COMMIT_SKILL_SCRIPT" commit --repo . \
   --file src/api.py \
   --type fix \
   --title '修复接口参数透传' \
