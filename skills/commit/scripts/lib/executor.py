@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from .coverage import resolve_commit_paths, run_coverage_from_plan
 from .errors import ErrorCode, SkillError, ok_payload
 from .models import CommitPlan, CommitRun
@@ -7,12 +10,40 @@ from .process import git
 from .signing import current_env, is_gpg_failure, resolve_sign_mode
 
 
+def split_stage_paths(repo_path: str, files: list[str]) -> tuple[list[str], list[str]]:
+    existing: list[str] = []
+    missing: list[str] = []
+    for file in files:
+        full_path = Path(repo_path, file)
+        if os.path.lexists(full_path):
+            existing.append(file)
+        else:
+            missing.append(file)
+    return existing, missing
+
+
+def raise_stage_error(plan: CommitPlan, result, phase: str, files: list[str]) -> None:
+    details = {
+        "repo_path": plan.repo_path,
+        "files": plan.files,
+        "staging_phase": phase,
+        "staging_files": files,
+    }
+    raise SkillError(ErrorCode.GIT_ADD_FAILED, result.stderr.strip() or "git staging 失败", details)
+
+
 def stage_files(plan: CommitPlan, env: dict[str, str]):
-    result = git(plan.repo_path, "add", "--", *plan.files, env=env)
-    if result.returncode == 0:
-        return result
-    details = {"repo_path": plan.repo_path, "files": plan.files}
-    raise SkillError(ErrorCode.GIT_ADD_FAILED, result.stderr.strip() or "git add 失败", details)
+    existing_files, missing_files = split_stage_paths(plan.repo_path, plan.files)
+    result = None
+    if existing_files:
+        result = git(plan.repo_path, "add", "--", *existing_files, env=env)
+        if result.returncode != 0:
+            raise_stage_error(plan, result, "add_existing", existing_files)
+    if missing_files:
+        result = git(plan.repo_path, "update-index", "--remove", "--", *missing_files, env=env)
+        if result.returncode != 0:
+            raise_stage_error(plan, result, "remove_missing", missing_files)
+    return result
 
 
 def unstage_files(plan: CommitPlan, env: dict[str, str]):

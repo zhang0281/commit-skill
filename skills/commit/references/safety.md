@@ -13,6 +13,7 @@ The skill scripts may use only:
 - `git rev-parse`
 - `git branch --show-current`
 - `git add <file>`
+- `git update-index --remove -- <file>` only to stage paths that are missing from the worktree but present in the plan snapshot
 - `git commit -m`
 - `git commit -S -m`
 - `git -c commit.gpgsign=false commit -m` only for the single auto-sign fallback path
