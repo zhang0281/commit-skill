@@ -1,0 +1,167 @@
+{
+  "ok": true,
+  "error_code": "OK",
+  "exit_code": 0,
+  "schema_version": 1,
+  "tool": "commit-skill",
+  "repo": "<REPO>",
+  "branch": "main",
+  "requested": {
+    "split_mode": "auto",
+    "sign_mode": "unsigned"
+  },
+  "sign_context": {
+    "normalized": true
+  },
+  "inventory": {
+    "repo": "<REPO>",
+    "branch": "main",
+    "head_exists": false,
+    "requested_split_mode": "auto",
+    "requested_sign_mode": "unsigned",
+    "changed_files": [
+      ".gitignore",
+      "README.md",
+      "docs/guide.md",
+      "src/app.py"
+    ],
+    "filtered_files": [
+      ".gitignore",
+      "README.md",
+      "docs/guide.md",
+      "src/app.py"
+    ],
+    "explicit_excluded_files": [],
+    "root_changed_files": [
+      ".gitignore",
+      "README.md",
+      "docs/guide.md",
+      "src/app.py"
+    ],
+    "top_level_groups": {
+      ".": [
+        ".gitignore",
+        "README.md"
+      ],
+      "docs": [
+        "docs/guide.md"
+      ],
+      "src": [
+        "src/app.py"
+      ]
+    },
+    "categories": {
+      "docs": [
+        "README.md",
+        "docs/guide.md"
+      ],
+      "tests": [],
+      "config": [
+        ".gitignore"
+      ],
+      "code": [
+        "src/app.py"
+      ]
+    },
+    "status": [
+      {
+        "status": "??",
+        "path": ".gitignore",
+        "category": "config"
+      },
+      {
+        "status": "??",
+        "path": "README.md",
+        "category": "docs"
+      },
+      {
+        "status": "??",
+        "path": "docs/guide.md",
+        "category": "docs"
+      },
+      {
+        "status": "??",
+        "path": "src/app.py",
+        "category": "code"
+      }
+    ],
+    "submodules": [],
+    "excluded_submodules": [],
+    "sign_context": {
+      "normalized": true
+    }
+  },
+  "commits": [
+    {
+      "id": "repo:single",
+      "kind": "repo",
+      "repo_path": "<REPO>",
+      "paths": [
+        ".gitignore",
+        "README.md",
+        "docs/guide.md",
+        "src/app.py"
+      ],
+      "category": "mixed",
+      "type": "",
+      "title": "",
+      "bullets": [],
+      "type_hint": "chore",
+      "title_hint": "整理本次改动",
+      "bullet_hints": [
+        "处理 4 个根仓文件改动"
+      ],
+      "reason": "单项目默认固定为一个根仓提交；AI 仅填写 message。",
+      "sign_mode": "unsigned",
+      "effective_sign_mode_hint": "unsigned"
+    }
+  ],
+  "exclude": [],
+  "coverage_baseline": {
+    "root_changed_files": [
+      ".gitignore",
+      "README.md",
+      "docs/guide.md",
+      "src/app.py"
+    ],
+    "root_fingerprints": [
+      {
+        "path": ".gitignore",
+        "exists": true,
+        "kind": "file",
+        "sha256": "32dae3052f331ee34d628ef535709b301259a45df7c7522c4d35dcf49873f00b",
+        "target": ""
+      },
+      {
+        "path": "README.md",
+        "exists": true,
+        "kind": "file",
+        "sha256": "bc70e26f40b8816eb177813dda1f5f529a27a4641d45aa19cae2348a8c6a5fe9",
+        "target": ""
+      },
+      {
+        "path": "docs/guide.md",
+        "exists": true,
+        "kind": "file",
+        "sha256": "90c390ec1de806bf945885cd0af51e90c3cd8cda0d0ff676051a56c20848c90f",
+        "target": ""
+      },
+      {
+        "path": "src/app.py",
+        "exists": true,
+        "kind": "file",
+        "sha256": "ad64355106bb158b020ecf9702be48f7730fc091dd4bb6a2f092b40393495b3d",
+        "target": ""
+      }
+    ],
+    "explicit_excluded_files": [],
+    "excluded_submodules": [],
+    "submodule_changes": [],
+    "required_pointer_updates": []
+  },
+  "notes": [
+    "默认固定提交边界：单项目一个根仓提交；多子模块时每个 dirty 子模块一个内部提交，父仓指针合并到一个根仓提交。",
+    "执行前应再次运行 coverage --plan-file，确保无 uncovered 项。",
+    "Codex 与 Claude Code 均调用同一组 Python 脚本；差异只在外层 skill metadata。"
+  ]
+}

@@ -1,0 +1,71 @@
+{
+  "ok": true,
+  "error_code": "OK",
+  "exit_code": 0,
+  "schema_version": 1,
+  "tool": "commit-skill",
+  "mode": "message-only",
+  "repo": "<REPO>",
+  "branch": "main",
+  "rules": [
+    "只填写 commits[].id/type/title/bullets。",
+    "不得新增、删除、合并、拆分或重排 commit。",
+    "title 只写 Conventional Commit 冒号后的中文标题正文。",
+    "bullets 为字符串数组，可留空。",
+    "优先直接复用 must_cover.bullets；若遗漏，脚本会在 apply-plan 前自动补齐。"
+  ],
+  "commits": [
+    {
+      "id": "submodule-internal:vendor/child",
+      "kind": "submodule_internal",
+      "scope_hint": "vendor/child",
+      "paths_count": 1,
+      "paths_preview": [
+        "module.txt"
+      ],
+      "type_hint": "chore",
+      "title_hint": "更新子模块 vendor/child 内部改动",
+      "bullet_hints": [
+        "处理子模块 vendor/child 内部文件变更"
+      ],
+      "must_cover": {
+        "id": "submodule-internal:vendor/child",
+        "bullets": [
+          "涉及子模块 vendor/child",
+          "处理子模块 vendor/child 内部 1 个文件改动",
+          "包含 代码 改动"
+        ],
+        "recommended_max_bullets": 3
+      },
+      "type": "",
+      "title": "",
+      "bullets": []
+    },
+    {
+      "id": "repo:submodule-pointers",
+      "kind": "repo",
+      "scope_hint": "submodule_pointer",
+      "paths_count": 1,
+      "paths_preview": [
+        "vendor/child"
+      ],
+      "type_hint": "chore",
+      "title_hint": "同步 1 个子模块引用",
+      "bullet_hints": [
+        "更新 vendor/child 的 gitlink 指针"
+      ],
+      "must_cover": {
+        "id": "repo:submodule-pointers",
+        "bullets": [
+          "涉及 vendor",
+          "同步 1 个子模块 gitlink 指针",
+          "包含 子模块引用 改动"
+        ],
+        "recommended_max_bullets": 3
+      },
+      "type": "",
+      "title": "",
+      "bullets": []
+    }
+  ]
+}

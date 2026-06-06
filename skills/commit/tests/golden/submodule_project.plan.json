@@ -1,0 +1,150 @@
+{
+  "ok": true,
+  "error_code": "OK",
+  "exit_code": 0,
+  "schema_version": 1,
+  "tool": "commit-skill",
+  "repo": "<REPO>",
+  "branch": "main",
+  "requested": {
+    "split_mode": "auto",
+    "sign_mode": "unsigned"
+  },
+  "sign_context": {
+    "normalized": true
+  },
+  "inventory": {
+    "repo": "<REPO>",
+    "branch": "main",
+    "head_exists": true,
+    "requested_split_mode": "auto",
+    "requested_sign_mode": "unsigned",
+    "changed_files": [
+      "vendor/child"
+    ],
+    "filtered_files": [
+      "vendor/child"
+    ],
+    "explicit_excluded_files": [],
+    "root_changed_files": [],
+    "top_level_groups": {},
+    "categories": {
+      "docs": [],
+      "tests": [],
+      "config": [],
+      "code": []
+    },
+    "status": [
+      {
+        "status": " M",
+        "path": "vendor/child",
+        "category": "code"
+      }
+    ],
+    "submodules": [
+      {
+        "path": "vendor/child",
+        "absolute_path": "<REPO>/vendor/child",
+        "status_prefix": " ",
+        "recorded_sha": "<SUBMODULE_SHA>",
+        "dirty": true,
+        "dirty_files": [
+          "module.txt"
+        ],
+        "dirty_status": [
+          {
+            "status": " M",
+            "path": "module.txt",
+            "category": "code"
+          }
+        ],
+        "ahead_commits": [],
+        "pointer_changed": false,
+        "requires_pointer_update": true
+      }
+    ],
+    "excluded_submodules": [],
+    "sign_context": {
+      "normalized": true
+    }
+  },
+  "commits": [
+    {
+      "id": "submodule-internal:vendor/child",
+      "kind": "submodule_internal",
+      "repo_path": "<REPO>/vendor/child",
+      "submodule_path": "vendor/child",
+      "paths": [
+        "module.txt"
+      ],
+      "category": "submodule",
+      "type": "",
+      "title": "",
+      "bullets": [],
+      "type_hint": "chore",
+      "title_hint": "更新子模块 vendor/child 内部改动",
+      "bullet_hints": [
+        "处理子模块 vendor/child 内部文件变更"
+      ],
+      "reason": "submodule dirty files 需先在子模块仓库内提交；AI 仅填写该提交的 message。",
+      "sign_mode": "unsigned",
+      "effective_sign_mode_hint": "unsigned"
+    },
+    {
+      "id": "repo:submodule-pointers",
+      "kind": "repo",
+      "repo_path": "<REPO>",
+      "paths": [
+        "vendor/child"
+      ],
+      "category": "submodule_pointer",
+      "type": "",
+      "title": "",
+      "bullets": [],
+      "type_hint": "chore",
+      "title_hint": "同步 1 个子模块引用",
+      "bullet_hints": [
+        "更新 vendor/child 的 gitlink 指针"
+      ],
+      "reason": "父仓需记录子模块 gitlink 变更；多个子模块指针合并为一个根仓提交。",
+      "sign_mode": "unsigned",
+      "effective_sign_mode_hint": "unsigned"
+    }
+  ],
+  "exclude": [],
+  "coverage_baseline": {
+    "root_changed_files": [],
+    "root_fingerprints": [],
+    "explicit_excluded_files": [],
+    "excluded_submodules": [],
+    "submodule_changes": [
+      {
+        "repo_path": "<REPO>/vendor/child",
+        "submodule_path": "vendor/child",
+        "changed_files": [
+          "module.txt"
+        ],
+        "fingerprints": [
+          {
+            "path": "module.txt",
+            "exists": true,
+            "kind": "file",
+            "sha256": "a948904f2f0f479b8f8197694b30184b0d2ed1c1cd2a1ec0fb85d299a192a447",
+            "target": ""
+          }
+        ]
+      }
+    ],
+    "required_pointer_updates": [
+      {
+        "repo_path": "<REPO>",
+        "submodule_path": "vendor/child"
+      }
+    ]
+  },
+  "notes": [
+    "默认固定提交边界：单项目一个根仓提交；多子模块时每个 dirty 子模块一个内部提交，父仓指针合并到一个根仓提交。",
+    "执行前应再次运行 coverage --plan-file，确保无 uncovered 项。",
+    "Codex 与 Claude Code 均调用同一组 Python 脚本；差异只在外层 skill metadata。"
+  ]
+}

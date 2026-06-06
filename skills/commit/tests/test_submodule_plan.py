@@ -48,9 +48,11 @@ class SubmodulePlanTest(unittest.TestCase):
         )
         payload = json.loads(result.stdout)
         self.assertTrue(payload["ok"])
-        kinds = {item["kind"] for item in payload["commits"]}
-        self.assertIn("submodule_internal", kinds)
-        self.assertIn("submodule_pointer", kinds)
+        self.assertEqual(len(payload["commits"]), 2)
+        self.assertEqual(payload["commits"][0]["kind"], "submodule_internal")
+        self.assertEqual(payload["commits"][1]["kind"], "repo")
+        self.assertEqual(payload["commits"][1]["paths"], ["vendor/child"])
+        self.assertEqual(payload["commits"][1]["id"], "repo:submodule-pointers")
 
     def test_exclude_submodule_path(self) -> None:
         result = subprocess.run(

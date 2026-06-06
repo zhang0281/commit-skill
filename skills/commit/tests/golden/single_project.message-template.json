@@ -1,0 +1,48 @@
+{
+  "ok": true,
+  "error_code": "OK",
+  "exit_code": 0,
+  "schema_version": 1,
+  "tool": "commit-skill",
+  "mode": "message-only",
+  "repo": "<REPO>",
+  "branch": "main",
+  "rules": [
+    "只填写 commits[].id/type/title/bullets。",
+    "不得新增、删除、合并、拆分或重排 commit。",
+    "title 只写 Conventional Commit 冒号后的中文标题正文。",
+    "bullets 为字符串数组，可留空。",
+    "优先直接复用 must_cover.bullets；若遗漏，脚本会在 apply-plan 前自动补齐。"
+  ],
+  "commits": [
+    {
+      "id": "repo:single",
+      "kind": "repo",
+      "scope_hint": "mixed",
+      "paths_count": 4,
+      "paths_preview": [
+        ".gitignore",
+        "README.md",
+        "docs/guide.md",
+        "src/app.py"
+      ],
+      "type_hint": "chore",
+      "title_hint": "整理本次改动",
+      "bullet_hints": [
+        "处理 4 个根仓文件改动"
+      ],
+      "must_cover": {
+        "id": "repo:single",
+        "bullets": [
+          "涉及 .、docs、src",
+          "处理 4 个根仓文件改动",
+          "包含 文档、配置、代码 改动"
+        ],
+        "recommended_max_bullets": 3
+      },
+      "type": "",
+      "title": "",
+      "bullets": []
+    }
+  ]
+}

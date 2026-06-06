@@ -36,6 +36,8 @@ class CliLibTest(unittest.TestCase):
         self.assertEqual(args2.command, "commit")
         args3 = parser.parse_args(["plan", "--repo", "/tmp/x", "--summary-only"])
         self.assertTrue(args3.summary_only)
+        args4 = parser.parse_args(["message-template", "--plan-file", "/tmp/p.json"])
+        self.assertEqual(args4.command, "message-template")
 
         summary = cli.plan_summary(
             {
@@ -60,6 +62,8 @@ class CliLibTest(unittest.TestCase):
         )
         self.assertEqual(summary["plan_file"], "/tmp/plan.json")
         self.assertEqual(summary["candidate_count"], 1)
+        self.assertTrue(summary["message_only"])
+        self.assertFalse(summary["plan_editing_allowed"])
 
     def test_command_functions(self) -> None:
         ns = argparse.Namespace(repo="/repo", include=[], exclude=[], split_mode="auto", sign_mode="auto", out=None, json=True)
@@ -100,14 +104,31 @@ class CliLibTest(unittest.TestCase):
              mock.patch.object(cli, "maybe_write_output"):
             self.assertEqual(cli.command_coverage(cov_plan_args), int(ErrorCode.COVERAGE_GAP))
 
-        args = argparse.Namespace(plan_file="/tmp/p.json", repo="/repo2", sign_mode="auto", out=None, json=True)
+        cov_plan_msg_args = argparse.Namespace(plan_file="/tmp/p.json", messages_file="/tmp/m.json", repo=None, planned=[], exclude=[], out=None, json=True)
+        with mock.patch.object(cli, "load_plan_file", return_value={"repo": "/repo", "commits": [{"repo_path": "/repo", "paths": ["a"], "type": "", "title": "", "bullets": []}], "exclude": []}), \
+             mock.patch.object(cli, "validate_plan_file", side_effect=lambda data, require_messages=False: data), \
+             mock.patch.object(cli, "load_message_file", return_value={"commits": []}), \
+             mock.patch.object(cli, "merge_message_file", return_value={"repo": "/repo", "commits": []}), \
+             mock.patch.object(cli, "run_coverage_from_plan", return_value={"passed": True}), \
+             mock.patch.object(cli, "maybe_write_output"):
+            self.assertEqual(cli.command_coverage(cov_plan_msg_args), 0)
+
+        msg_args = argparse.Namespace(plan_file="/tmp/p.json", out=None, json=True)
+        with mock.patch.object(cli, "load_plan_file", return_value={"repo": "/repo", "commits": [], "exclude": []}), \
+             mock.patch.object(cli, "validate_plan_file", side_effect=lambda data, require_messages=False: data), \
+             mock.patch.object(cli, "build_message_template", return_value={"mode": "message-only"}), \
+             mock.patch.object(cli, "maybe_write_output") as writer:
+            self.assertEqual(cli.command_message_template(msg_args), 0)
+            writer.assert_called_once()
+
+        args = argparse.Namespace(plan_file="/tmp/p.json", messages_file=None, repo="/repo2", sign_mode="auto", out=None, json=True)
         with mock.patch.object(cli, "load_plan_file", return_value={"repo": "/repo1", "commits": [{"repo_path": "/repo1", "paths": ["a"], "type": "feat", "title": "x", "bullets": []}], "exclude": []}), \
              mock.patch.object(cli, "validate_plan_file", side_effect=lambda data, require_messages=False: data), \
              mock.patch.object(cli, "repo_root", return_value="/repo2"):
             with self.assertRaises(SkillError):
                 cli.command_apply_plan(args)
 
-        args_ok = argparse.Namespace(plan_file="/tmp/p.json", repo="/repo1", sign_mode="auto", out=None, json=True)
+        args_ok = argparse.Namespace(plan_file="/tmp/p.json", messages_file=None, repo="/repo1", sign_mode="auto", out=None, json=True)
         with mock.patch.object(cli, "load_plan_file", return_value={"repo": "/repo1", "commits": [{"repo_path": "/repo1", "paths": ["a"], "type": "feat", "title": "x", "bullets": []}], "exclude": []}), \
              mock.patch.object(cli, "validate_plan_file", side_effect=lambda data, require_messages=False: data), \
              mock.patch.object(cli, "repo_root", return_value="/repo1"), \
@@ -115,6 +136,18 @@ class CliLibTest(unittest.TestCase):
              mock.patch.object(cli, "apply_plan", return_value={"ok": True}), \
              mock.patch.object(cli, "maybe_write_output") as writer:
             self.assertEqual(cli.command_apply_plan(args_ok), 0)
+            writer.assert_called_once()
+
+        args_msg_ok = argparse.Namespace(plan_file="/tmp/p.json", messages_file="/tmp/m.json", repo="/repo1", sign_mode="auto", out=None, json=True)
+        with mock.patch.object(cli, "load_plan_file", return_value={"repo": "/repo1", "commits": [{"repo_path": "/repo1", "paths": ["a"], "type": "", "title": "", "bullets": []}], "exclude": []}), \
+             mock.patch.object(cli, "validate_plan_file", side_effect=lambda data, require_messages=False: data), \
+             mock.patch.object(cli, "load_message_file", return_value={"commits": []}), \
+             mock.patch.object(cli, "merge_message_file", return_value={"repo": "/repo1", "commits": [{"repo_path": "/repo1", "paths": ["a"], "type": "feat", "title": "x", "bullets": []}], "exclude": []}), \
+             mock.patch.object(cli, "repo_root", return_value="/repo1"), \
+             mock.patch.object(cli, "detect_signing", return_value={"suggested_sign_mode": "signed"}), \
+             mock.patch.object(cli, "apply_plan", return_value={"ok": True}), \
+             mock.patch.object(cli, "maybe_write_output") as writer:
+            self.assertEqual(cli.command_apply_plan(args_msg_ok), 0)
             writer.assert_called_once()
 
         commit_args = argparse.Namespace(repo="/repo", file=["a.py"], type="feat", title="x", bullet=["b"], sign_mode="auto", dry_run=True, out=None, json=True)

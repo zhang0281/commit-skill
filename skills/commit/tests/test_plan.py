@@ -36,8 +36,9 @@ class PlanCommandTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["repo"], str(self.repo))
         self.assertIn("commits", payload)
-        kinds = {item["kind"] for item in payload["commits"]}
-        self.assertIn("repo", kinds)
+        self.assertEqual(len(payload["commits"]), 1)
+        self.assertEqual(payload["commits"][0]["kind"], "repo")
+        self.assertEqual(payload["commits"][0]["id"], "repo:single")
         self.assertIn("README.md", payload["inventory"]["root_changed_files"])
         self.assertIn("src/app.py", payload["inventory"]["root_changed_files"])
 

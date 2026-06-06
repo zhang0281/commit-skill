@@ -79,6 +79,81 @@ class ApplyPlanTest(unittest.TestCase):
         log = subprocess.run(["git", "-C", str(self.repo), "log", "--oneline", "-1"], capture_output=True, text=True, check=True)
         self.assertIn("feat: 初始化测试仓库", log.stdout)
 
+    def test_apply_plan_accepts_messages_file(self) -> None:
+        self.plan_file.write_text(
+            json.dumps(
+                {
+                    "repo": str(self.repo),
+                    "requested": {"sign_mode": "unsigned"},
+                    "coverage_baseline": {
+                        "root_changed_files": ["README.md", "src/demo.py"],
+                        "explicit_excluded_files": [],
+                        "submodule_changes": [],
+                        "required_pointer_updates": [],
+                    },
+                    "exclude": [],
+                    "commits": [
+                        {
+                            "id": "repo:single",
+                            "repo_path": str(self.repo),
+                            "paths": ["README.md", "src/demo.py"],
+                            "type": "",
+                            "title": "",
+                            "bullets": [],
+                            "sign_mode": "unsigned",
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        messages_file = self.repo / "messages.json"
+        messages_file.write_text(
+            json.dumps(
+                {
+                    "repo": str(self.repo),
+                    "commits": [
+                        {
+                            "id": "repo:single",
+                            "type": "feat",
+                            "title": "初始化测试仓库",
+                            "bullets": ["新增 README", "新增 demo 脚本"],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [
+                "python3",
+                "-B",
+                str(SCRIPT),
+                "apply-plan",
+                "--plan-file",
+                str(self.plan_file),
+                "--messages-file",
+                str(messages_file),
+                "--repo",
+                str(self.repo),
+                "--sign-mode",
+                "unsigned",
+                "--json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"])
+        log = subprocess.run(["git", "-C", str(self.repo), "log", "--oneline", "-1"], capture_output=True, text=True, check=True)
+        self.assertIn("feat: 初始化测试仓库", log.stdout)
+        self.assertIn("message_coverage_audit", payload)
+        self.assertTrue(payload["message_coverage_audit"])
+
     def test_apply_plan_handles_already_staged_deletions(self) -> None:
         (self.repo / "obsolete.txt").write_text("old\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(self.repo), "add", "README.md", "src/demo.py", "obsolete.txt"], check=True)
