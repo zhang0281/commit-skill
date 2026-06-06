@@ -1,6 +1,6 @@
 # Plan JSON Schema
 
-Read this when editing `/tmp/commit-plan-<repo_hash>.json`, fixing coverage gaps, or validating whether a path belongs to the initial snapshot.
+Read this when editing `/tmp/commit-plan-<repo_hash>.json`, fixing coverage gaps, or validating whether a path belongs to the initial snapshot. Default fast path should prefer `message-template` + `messages-file`; full plan editing is now the debug path.
 
 ## Core shape
 
@@ -46,7 +46,7 @@ Read this when editing `/tmp/commit-plan-<repo_hash>.json`, fixing coverage gaps
 
 ## Editable fields
 
-AI may edit only these semantic fields unless fixing coverage:
+AI may edit only these semantic fields unless explicitly entering debug mode to fix coverage:
 
 - `commits`: split, merge, reorder semantic units while preserving snapshot constraints.
 - `type`: one of `feat|fix|docs|refactor|test|chore|style|perf`.

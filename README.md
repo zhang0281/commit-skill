@@ -28,12 +28,15 @@ commit-skill/
 
 ## 架构
 
-本仓库的 `commit` skill 采用 **AI 判定 + 代码执行** 的混合模式：
+本仓库的 `commit` skill 采用 **AI 仅生成 commit message + 脚本执行** 的混合模式：
 
-- **AI**：做语义拆分、残余提交裁决、中文提交信息生成
-- **脚本**：做 inventory、plan JSON、coverage audit、统一错误码、submodule 扫描、签名探测与真正的 `git commit`
-- **多子代理**：默认自动判断；多文件、多候选、多 repo/submodule 时启动只读 explorer 子代理按 candidate/submodule 并行收集 facts；不可用则串行退化。
-- **plan 默认 summary-only**：`plan` 自动先跑、输出 summary 供模型、同时写出完整 `/tmp/commit-plan-<repo_hash>.json` 供后续 `coverage`/`apply-plan`。
+- **AI**：只填写固定 candidate commits 的 `type/title/bullets`
+- **脚本**：负责 inventory、candidate 固化、message template、message merge、message coverage audit、coverage audit、统一错误码、submodule 扫描、签名探测与真正的 `git commit`
+- **默认 fast path**：`plan --summary-only` 自动先跑、输出 summary 并写出完整 `/tmp/commit-plan-<repo_hash>.json`；随后 `message-template` 生成 AI 专用最小 JSON；最终 `apply-plan --messages-file` 一步落地
+- **固定 commit 数**：
+  - 单项目根仓改动：1 个 commit
+  - 多子模块改动：每个 dirty submodule 1 个 internal commit，另加 1 个根仓 pointer commit
+- **message coverage audit**：`message-template` 会给出 `must_cover`，`apply-plan` 若发现 title/bullets 未覆盖关键变更面，会自动补齐必要 bullets
 - **单次快照原则**：`coverage_baseline` 固定本轮 `$commit` 起手时的路径与 fingerprint；后续新路径或同路径内容漂移不会被顺带提交。
 - **渐进披露**：`SKILL.md` 只保留主流程，schema / signing / submodule / error codes / safety 细则拆入 `skills/commit/references/`。
 
@@ -45,24 +48,27 @@ commit-skill/
 
 ## 默认工作流
 
-1. `plan --summary-only`：默认先写 summary 供 AI，完整计划存 `/tmp/commit-plan-<repo_hash>.json`
-2. AI 基于计划 JSON 做语义裁决，补全 `type/title/bullets`
-3. `coverage --plan-file`：仅校验本次快照覆盖度，并拒绝快照外路径
-4. `apply-plan --plan-file`：统一执行 commit，仅落地本次快照内改动
+1. `plan --summary-only`：固定 candidate commits，完整计划存 `/tmp/commit-plan-<repo_hash>.json`
+2. `message-template --plan-file`：生成只允许填写 `id/type/title/bullets` 的最小 JSON
+3. AI 只回填 messages JSON，不再编辑完整 plan，也不再参与 split/merge
+4. `apply-plan --plan-file --messages-file`：脚本完成 merge、coverage 与实际提交
 
-## 多子代理并行分析（默认自动判断）
+## message-only 硬限制
 
-当 plan 产出多个 commit 条目、多文件改动，或既有 submodule 又有根仓改动时，主线程默认启动只读 explorer 子代理：
+- AI 不得修改：
+  - `paths`
+  - `repo_path`
+  - `sign_mode`
+  - `coverage_baseline`
+  - commit 条目数量与顺序
+- `messages-file` 若缺 id、多 id、非法字段、非法 type、空 title，脚本直接拒绝执行
+- `apply-plan` 会在真正提交前自动执行 coverage；快照外路径、重复路径、pointer 顺序错误、fingerprint drift 一律拦截
 
-- 按 candidate commit / submodule path 分派
-- 子代理只读：`git status --porcelain -z`、`git diff --name-status`、`git log -1`、`git submodule status`
-- 子代理回报：files、sign hints、top-level group、submodule 状态
-- 主线程汇总后更新 plan JSON，确保 coverage/execute 以真实 facts 运行
-- 若运行环境不可用子代理，自动退化为主线程串行采集
 ## 脚本子命令
 
 - `inventory`：调试库存信息
 - `plan`：生成可编辑计划 JSON
+- `message-template`：生成 AI 专用的最小 message JSON 模板
 - `coverage`：按参数或 plan JSON 执行覆盖校验
 - `apply-plan`：执行最终计划
 - `commit`：直接执行单个 commit（调试用途）
@@ -72,6 +78,9 @@ commit-skill/
 ```bash
 python3 -m unittest discover -s skills/commit/tests -p 'test_*.py'
 ```
+
+- `skills/commit/tests/test_golden.py`：对 `plan` 与 `message-template` 的稳定 JSON 输出做 golden snapshot 校验
+- `skills/commit/tests/golden/`：保存归一化后的参考输出，避免重构后行为无意漂移
 
 ## 说明
 

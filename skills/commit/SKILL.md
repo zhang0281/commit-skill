@@ -1,19 +1,22 @@
 ---
 name: commit
-description: 拆分并创建规范 Git 提交。Use when Codex or Claude Code needs to inspect working tree changes, build an editable commit plan JSON, decide commit boundaries, handle submodule internal commits and pointer updates, generate Chinese Conventional Commit messages, or execute a safe commit workflow from a finalized plan.
+description: 拆分并创建规范 Git 提交。Use when Codex or Claude Code needs to inspect working tree changes, let AI generate only commit messages, then hand the remaining plan validation, coverage audit, submodule ordering, signing, and actual git commit execution entirely to scripts under hard constraints.
 ---
 
 # Commit
 
-将执行 `$commit` 当下扫描到的路径与内容快照，整理成一个或多个“每次只做一件事”的 Git 提交。
+将执行 `$commit` 当下扫描到的路径与内容快照，整理成固定数量的 Git 提交。
 
-## 核心定位
+## Core Constraints
 
-- **AI 负责**：语义拆分、标题与 bullets、残余提交裁决。
-- **脚本负责**：inventory、plan JSON、coverage audit、submodule 扫描、签名探测与实际 `git add` / `git commit`。
-- **默认流**：`plan → 编辑 plan JSON → coverage → apply-plan`。
-- **铁律**：不改工作区文件内容、不做 partial staging、只处理本次 `$commit` 起手扫描到的路径与内容快照。
-- **并行默认**：多文件、多候选 commit 或多 repo/submodule 改动时，默认自动判断并启动只读子代理加速 facts 收集；不可用则串行退化。
+- **AI 只负责**：生成每个固定 candidate commit 的 `type/title/bullets`。
+- **脚本负责**：扫描、候选 commit 固化、message template、message merge、coverage、signing、submodule 顺序、`git add/commit`。
+- **默认快路**：`plan --summary-only → message-template → AI 填 messages.json → apply-plan --messages-file`。
+- **默认边界**：
+  - 单项目根仓改动：固定 **1 个 commit**
+  - 多子模块改动：固定为 **每个 dirty 子模块 1 个 internal commit**，再加 **1 个根仓 pointer commit** 统一记录 gitlink
+- **硬限制**：不得让 AI 改 `paths/repo_path/sign_mode/coverage_baseline`，不得让 AI 合并、拆分、增删、重排 commit。
+- **执行约束**：不要手写 Git 命令；不要启用子代理；不要输出冗长过程说明。
 
 ## 资源路径解析（防止误找项目目录）
 
@@ -36,17 +39,9 @@ description: 拆分并创建规范 Git 提交。Use when Codex or Claude Code ne
 - `$commit 不签名` / `$commit 禁用 GPG` → `sign_mode=unsigned`
 - 未指定时：`split_mode=auto`、`sign_mode=auto`
 
-## 何时读取 references
-
-- 编辑或修复 plan JSON schema / coverage gaps / snapshot drift：读 `references/plan-schema.md`。
-- 签名、GPG、fallback、`sign_mode`：读 `references/signing.md`。
-- submodule internal / pointer、submodule include/exclude：读 `references/submodules.md`。
-- 非零错误码、`ok=false`、`passed=false`：读 `references/error-codes.md`。
-- 手动恢复、命令边界、staged cleanup：读 `references/safety.md`。
-
 ## 默认执行链
 
-### 1) 自动先跑 `plan`
+### 1) 固定候选 commit
 
 ```bash
 python3 "$COMMIT_SKILL_SCRIPT" plan --repo . --summary-only
@@ -54,48 +49,65 @@ python3 "$COMMIT_SKILL_SCRIPT" plan --repo . --summary-only
 
 要点：
 
-- summary 返回 `plan_file`，完整计划默认写入 `/tmp/commit-plan-<repo_hash>.json`。
-- `coverage_baseline` 是本轮唯一路径与内容快照；后续新路径或同路径内容漂移，不得被顺带提交。
-- 若 `changed_count=0`，直接报告无可提交改动；`apply-plan` 可 no-op。
+- `summary.plan_file` 是后续唯一计划文件。
+- `candidate_commits` 已固定本轮 commit 边界；默认不再让 AI 讨论是否合并/拆分。
+- 根仓默认只生成一个 commit；子模块默认每个 dirty submodule 一个 internal commit，最后根仓再统一提交 gitlink pointer。
+- `changed_count=0` 时直接结束。
 
-### 2) AI 编辑 plan JSON
-
-AI 只做这些判断：
-
-1. 是否同一目的；是否拆成多个纯语义 commit。
-2. docs / tests / config 是否并入对应语义单元。
-3. 无法纯语义拆分时，降级为模块级或文件级 residual commit。
-4. 填写中文 Conventional Commit 的 `type` / `title` / `bullets`。
-
-不要手写 Git 命令；编辑 `commits` 列表。细则见 `references/plan-schema.md`。
-
-### 3) 默认自动并行 facts 收集
-
-满足任一条件即可启动只读 `explorer` 子代理：多个 candidate commit、root + submodule 混合、多个 repo_path、改动文件较多。
-
-子代理只读：`git status --porcelain -z` / `git diff --name-status` / `git log -1` / `git submodule status`。禁止写、禁止 `git add/commit/reset`。最终 plan 编辑、coverage 与 apply 仍在主线程执行。
-
-### 4) 执行前跑 coverage
+### 2) 生成 AI message template
 
 ```bash
-python3 "$COMMIT_SKILL_SCRIPT" coverage --plan-file /tmp/commit-plan-<repo_hash>.json --json
+python3 "$COMMIT_SKILL_SCRIPT" message-template --plan-file /tmp/commit-plan-<repo_hash>.json
 ```
 
-若 `passed=false`：根据返回字段修 plan 或重跑 plan；不得把快照外路径捎带提交。错误字段说明见 `references/error-codes.md` 与 `references/plan-schema.md`。
+让 AI **只返回**：
 
-### 5) 最后用 `apply-plan` 落地
+```json
+{
+  "commits": [
+    {
+      "id": "repo:docs",
+      "type": "docs",
+      "title": "更新说明文档",
+      "bullets": ["补齐使用说明"]
+    }
+  ]
+}
+```
+
+message 建议：
+
+- 以 **1 个 title + 0~2 个 bullets** 为默认
+- bullets 宜短，不宜铺陈成长段
+- 若用户未明确要求详细审计说明，优先更短的 message，以减少 token 与生成时间
+- `must_cover.bullets` 是最低覆盖面；能直接复用则直接复用
+
+### 3) 交给脚本执行
 
 ```bash
-python3 "$COMMIT_SKILL_SCRIPT" apply-plan --plan-file /tmp/commit-plan-<repo_hash>.json --json
+python3 "$COMMIT_SKILL_SCRIPT" apply-plan \
+  --plan-file /tmp/commit-plan-<repo_hash>.json \
+  --messages-file /tmp/commit-messages.json \
+  --json
 ```
 
-`apply-plan` 会先复核 coverage，再逐个提交快照内路径，处理签名与 submodule 顺序，并返回 SHA / signed / fallback / attempts / 错误码。
+`apply-plan` 会自动完成：
+
+- merge `messages.json`
+- 校验 id 集合、字段白名单、message 合法性
+- 执行 message coverage audit：若 `must_cover` 中的关键变更面未体现在 title/bullets，中间脚本会自动补齐 bullets
+- coverage audit
+- submodule 顺序校验
+- signing / fallback
+- 真正的 `git commit`
 
 ## 手动调试子命令
 
 ```bash
 python3 "$COMMIT_SKILL_SCRIPT" inventory --repo . --json
 python3 "$COMMIT_SKILL_SCRIPT" plan --repo . --out /tmp/commit-plan-<repo_hash>.json --json
+python3 "$COMMIT_SKILL_SCRIPT" message-template --plan-file /tmp/commit-plan-<repo_hash>.json --json
+python3 "$COMMIT_SKILL_SCRIPT" coverage --plan-file /tmp/commit-plan-<repo_hash>.json --messages-file /tmp/commit-messages.json --json
 python3 "$COMMIT_SKILL_SCRIPT" commit --repo . \
   --file src/api.py \
   --type fix \
@@ -104,12 +116,20 @@ python3 "$COMMIT_SKILL_SCRIPT" commit --repo . \
   --sign-mode auto
 ```
 
-## 输出要求
+## 何时读取 references
 
-最终回答保持：
+- `message-template` 之外还想手改完整 plan：读 `references/plan-schema.md`。此路仅作调试，不是默认快路。
+- 签名、GPG、fallback、`sign_mode`：读 `references/signing.md`。
+- submodule internal / pointer、submodule include/exclude：读 `references/submodules.md`。
+- 非零错误码、`ok=false`、`passed=false`：读 `references/error-codes.md`。
+- 手动恢复、命令边界、staged cleanup：读 `references/safety.md`。
 
-- 【判词】一句话定性
-- 【斩链】概述改动、submodule 判断、提交计划、coverage audit、执行动作
-- 【验尸】commit SHA / 标题 / 文件 / 是否 signed / 是否 fallback
-- 【余劫】本次快照中剩余未提交项（仅允许显式排除）、snapshot drift 或失败点；快照之后新增的改动不计入本轮
-- 【再斩】下一步
+## Response Format
+
+最终回答尽量短，使用工程化字段：
+
+- `summary`：一句话说明执行结果
+- `plan`：candidate commits、执行步骤、coverage 结果
+- `result`：commit SHA / title / files / signed / fallback
+- `remaining`：剩余未提交项或失败点
+- `next_step`：下一步

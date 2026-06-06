@@ -8,6 +8,7 @@ Read this when a script returns `ok=false`, `passed=false`, non-zero exit code, 
 | `INVALID_ARGUMENT` | 10 | Bad CLI args | Correct invocation |
 | `NOT_GIT_REPO` | 11 | `--repo` is not a Git repo | Ask for/locate repo root |
 | `PLAN_FILE_INVALID` | 12 | Malformed or unsafe plan | Fix plan JSON; do not apply |
+| `MESSAGE_FILE_INVALID` | 13 | Malformed or unsafe messages JSON | Fix messages JSON; do not apply |
 | `GIT_STATUS_FAILED` | 20 | status scan failed | Report stderr; stop |
 | `GIT_DIFF_FAILED` | 21 | diff scan failed | Report stderr; stop |
 | `GIT_ADD_FAILED` | 22 | staging failed | Report pathspec/details |

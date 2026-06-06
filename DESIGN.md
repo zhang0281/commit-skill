@@ -5,7 +5,7 @@
 - 将 `commit` 技能从本地目录抽离为可独立托管的 GitHub 仓库
 - 保持与 cc-switch 技能发现 / 安装 / 更新流程兼容
 - 同时兼容 Codex 与 Claude Code
-- 通过 plan JSON + 多脚本架构，进一步降低 prompt token 消耗并提高维护性
+- 通过 message-only AI + plan JSON + 多脚本架构，进一步降低 prompt token 消耗并提高维护性
 - 将 `$commit` 的提交边界固定为“启动时扫描到的路径与内容快照”，避免执行期重复扫描直到全部提交
 
 ## 方案选择
@@ -30,48 +30,89 @@
    - 前者服务 Codex
    - 后者服务 Claude Code
 
-3. **以 `plan JSON` 作为 AI 与脚本的中介协议**
- - `plan` 负责生成结构化候选计划
- - AI 负责编辑 `commits` 的语义字段
- - `coverage` / `apply-plan` 消费最终计划
-  - 默认自动跑 `plan --summary-only`，向模型提供精简 summary，同时把完整 JSON 写 `/tmp/commit-plan-<repo_hash>.json` 供后续复用
+3. **以 `plan JSON` + `messages JSON` 作为 AI 与脚本的中介协议**
+ - `plan` 负责生成结构化候选计划，并固定默认 commit 数量
+ - `message-template` 负责把 plan 缩成 AI 专用的最小 message 模板
+ - AI 只填写 `id/type/title/bullets`
+ - `apply-plan --messages-file` 负责 merge、校验与执行
+ - 默认自动跑 `plan --summary-only`，向模型提供精简 summary，同时把完整 JSON 写 `/tmp/commit-plan-<repo_hash>.json` 供后续复用
 
-4. **保留单入口 `scripts/commit_skill.py`，内部拆成多模块**
+4. **固定默认提交边界**
+   - 单项目根仓改动统一收为 1 个根仓 commit
+   - 多子模块改动按 dirty submodule 拆成多个 internal commit
+   - 父仓 gitlink pointer 统一收为 1 个根仓 commit，避免残留脏树
+
+5. **message coverage audit**
+   - `message-template` 为每个 commit 生成 `must_cover`
+   - AI 可直接复用这些 bullets，也可自行压缩表达
+   - `apply-plan` merge message 后会自动补齐遗漏的关键变更面，确保提交说明不失真
+
+6. **保留单入口 `scripts/commit_skill.py`，内部拆成多模块**
    - 对 AI 保持稳定调用面
    - 对维护者暴露清晰边界：inventory / signing / coverage / executor / planner
 
-5. **统一错误码**
+7. **统一错误码**
    - 让 Codex 与 Claude Code 都能稳定消费脚本返回
    - 避免把错误处理逻辑塞回 prompt
 
-6. **增强 submodule 支持**
-   - `plan` 显式产生 `submodule_internal` 与 `submodule_pointer` 两类提交项
+8. **增强 submodule 支持**
+   - `plan` 显式产生 `submodule_internal` 提交项，并将多个 pointer 更新并入一个根仓提交
    - 让 AI 与执行器都能识别父仓库 / 子模块仓库的边界
 
-7. **固定单次快照边界**
+9. **固定单次快照边界**
    - `plan` 生成的 `coverage_baseline` 即本次 `$commit` 唯一合法输入集合
    - `coverage` 不仅检查“是否漏提”，还检查“是否夹带快照外路径”与“同路径内容是否漂移”
    - `apply-plan` 仅解析并提交快照内文件，不再重复扫描工作区以追赶后续新增改动
 
-8. **默认自动并行 facts 收集**
-   - 多文件、多候选、多 repo/submodule 改动时默认启用只读 explorer 子代理
-   - 子代理仅收集 facts，最终 plan 编辑、coverage 与 apply 仍由主线程闭环
-   - 子代理不可用时自动串行退化
+10. **默认禁用过程型 AI 编排**
+   - 默认不再让 AI 编辑完整 plan JSON、讨论 split/merge、或启动子代理
+   - AI 仅消费 `message-template`，返回最小 messages JSON
+   - 其余步骤全部由脚本执行，减少 prompt 噪声与生成延迟
 
-9. **plan 保留 sign_mode=auto**
+11. **plan 保留 sign_mode=auto**
    - `auto` 不在 plan 阶段固化为 `signed`，只写 `effective_sign_mode_hint`
    - apply 阶段再做完整 GPG 探测，auto 签名失败时允许单次 fallback
 
-10. **渐进披露文档结构**
+12. **渐进披露文档结构**
    - 高频触发的 `SKILL.md` 只保留主流程与引用导航
    - schema / signing / submodule / error codes / safety 细则拆入 `references/`，按需读取
 
 ## 已知限制
 
-- 语义拆分仍依赖 AI 裁决，脚本只处理确定性逻辑
+- 复杂跨模块语义拆分不再交给默认快路；若 planner 的固定候选不理想，只能显式切回手改 plan 的调试路径
 - submodule merge 策略仍偏保守，默认先 internal 再 pointer
 - `sign-mode=auto` 在无 TTY 沙箱下可能探测不到完整 GPG 灵脉，但结构已允许 fallback
 - 若 `$commit` 执行过程中用户又修改了工作区，这些新路径将留待下一次 `$commit`；若同路径内容漂移，本轮会中止并要求重跑 plan
+
+### 2026-06-06 - 收紧为 message-only AI 快路
+
+**变更内容**: 新增 `message-template` 子命令与 `messages-file` 校验/merge 流程；`apply-plan` 支持直接消费 AI 生成的最小 message JSON；skill prompt 改为默认禁止 AI 编辑完整 plan、禁止子代理、禁止过程长思考。
+
+**变更理由**: 将 AI 参与面收敛到“仅生成 commit message”，把 plan 固化、coverage、签名、submodule 顺序与实际提交全部下沉到脚本，以降低 token 消耗和响应时延。
+
+**影响范围**: `skills/commit/scripts/lib/{cli,messages,errors}.py`、`skills/commit/tests/`、`skills/commit/SKILL.md`、`skills/commit/agents/openai.yaml`、`README.md`、`DESIGN.md`。
+
+**决策依据**: 目标是硬限制而非软提示；只有把 AI 的输入输出收敛为固定 JSON 契约，才能真正缩小推理空间与执行路径。
+
+### 2026-06-06 - 固定为单项目 1 commit / 多子模块按模块拆分
+
+**变更内容**: 调整 planner：根仓默认只生成 1 个 commit；若存在多个 dirty submodule，则每个子模块生成 1 个 internal commit，父仓所有 gitlink pointer 更新并入 1 个根仓 commit。
+
+**变更理由**: 继续压缩 AI 决策面与 candidate 数量，让提交数量更可预测，同时保持父仓最终干净。
+
+**影响范围**: `skills/commit/scripts/lib/planner.py`、`skills/commit/tests/test_{plan,submodule_plan}.py`、`skills/commit/SKILL.md`、`README.md`、`DESIGN.md`。
+
+**决策依据**: Git 子模块的 gitlink 变更无法凭空消失；要么留父仓脏树，要么补 1 个 pointer commit。后者更稳。
+
+### 2026-06-06 - 为 commit message 增加 must-cover 与自动补漏
+
+**变更内容**: `message-template` 现在为每个 commit 生成 `must_cover`；`merge_message_file()` 在 apply 前执行 message coverage audit，若 title/bullets 未覆盖关键模块、影响面或 pointer 信息，则自动补齐缺失 bullets，并将结果写入 `message_coverage_audit`。
+
+**变更理由**: 目标是让单个 commit 的消息完整覆盖关键变更面；单靠 AI 自由生成不稳定，需要脚本兜底。
+
+**影响范围**: `skills/commit/scripts/lib/messages.py`、`skills/commit/tests/test_{messages,apply_plan}.py`、`skills/commit/SKILL.md`、`README.md`、`DESIGN.md`。
+
+**决策依据**: 完整性应是结构化覆盖问题，而非字数问题；将关键信息约束成 `must_cover`，再由脚本补漏，方可硬保证。
 
 ## 变更历史
 
@@ -99,7 +140,7 @@
 
 **变更内容**: 将 coverage/apply-plan 改为只接受 `$commit` 起手时 `plan` 记录的快照路径；若计划混入快照外新路径则直接报错，并同步更新 skill 文档与 agent prompt
 
-**变更理由**: 前辈所求，是避免技能在执行期重复扫描并一路追到“全部提交”为止，改为仅提交本次调用时看到的变更
+**变更理由**: 目标是避免技能在执行期重复扫描并持续追赶新改动，改为仅提交本次调用时的快照变更
 
 **影响范围**: `skills/commit/scripts/lib/coverage.py`、`skills/commit/scripts/lib/executor.py`、`skills/commit/SKILL.md`、`skills/commit/agents/openai.yaml`、`README.md`、`DESIGN.md`、相关 tests
 
