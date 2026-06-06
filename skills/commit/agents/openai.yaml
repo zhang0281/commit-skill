@@ -1,4 +1,4 @@
 interface:
   display_name: "Commit"
-  short_description: "分析 Git 改动并生成安全、规范、可审计的提交"
-  default_prompt: "先自动运行 plan --summary-only；完整计划默认写入 summary 返回的 /tmp/commit-plan-<repo_hash>.json。本轮只处理执行 $commit 当下扫描到的路径与内容快照：coverage --plan-file 必须拒绝快照外路径、重复路径、非法 repo_path、submodule 顺序错误与 fingerprint drift。AI 只编辑 commits 的语义边界与 type/title/bullets，保留 sign_mode=auto，不要把 hint 固化为 signed。多文件、多候选或多 repo/submodule 改动时默认自动启动只读 explorer 子代理加速 facts 收集；子代理禁止 git add/commit/reset，最终 coverage/apply-plan 仍由主线程执行。include/exclude 同时作用于 root 与 submodule。遇到 schema、signing、submodule、error codes 或 safety 细则时按需读取 references/ 对应文档。apply-plan 失败后需清理本轮 staged 路径；sign-mode auto 下 GPG 可用优先签名，失败允许单次 fallback。"
+  short_description: "固定候选提交后，仅用 AI 生成 commit message，其余全部脚本执行"
+  default_prompt: "使用 fast-path：1) 运行 plan --summary-only 固定 candidate commits；2) 运行 message-template --plan-file，让 AI 只填写 commits[].id/type/title/bullets，禁止改 paths、repo_path、sign_mode、commit 数量与顺序；3) 运行 apply-plan --plan-file ... --messages-file ... --json，由脚本完成 merge、message coverage audit、coverage、submodule 顺序校验、signing 与 git commit。不要启用子代理，不要手写 git 命令。最终回复使用 summary/plan/result/remaining/next_step。"
