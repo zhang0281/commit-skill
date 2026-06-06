@@ -10,6 +10,7 @@ from .coverage import load_plan_file, run_coverage_from_args, run_coverage_from_
 from .errors import ErrorCode, SkillError, error_payload, ok_payload
 from .executor import apply_plan
 from .inventory import build_inventory, changed_file_paths, expand_targets, fingerprint_paths
+from .messages import build_message_template, load_message_file, merge_message_file
 from .planner import build_plan
 from .process import repo_root
 from .signing import detect_signing
@@ -64,6 +65,8 @@ def plan_summary(plan_payload: dict[str, object], plan_file: str | None = None) 
         "candidate_count": len(plan_payload["commits"]),
         "top_level_groups": list(inventory["top_level_groups"].keys()),
         "candidate_commits": candidates,
+        "message_only": True,
+        "plan_editing_allowed": False,
     }
 
 
@@ -98,6 +101,9 @@ def command_plan(args: argparse.Namespace) -> int:
 def command_coverage(args: argparse.Namespace) -> int:
     if args.plan_file:
         plan = validate_plan_file(load_plan_file(args.plan_file), require_messages=False)
+        messages_file = getattr(args, "messages_file", None)
+        if messages_file:
+            plan = merge_message_file(plan, load_message_file(messages_file))
         payload = ok_payload(**run_coverage_from_plan(plan))
         maybe_write_output(payload, args.out)
         return 0 if payload["passed"] else int(ErrorCode.COVERAGE_GAP)
@@ -109,8 +115,18 @@ def command_coverage(args: argparse.Namespace) -> int:
     return 0 if payload["passed"] else int(ErrorCode.COVERAGE_GAP)
 
 
+def command_message_template(args: argparse.Namespace) -> int:
+    plan = validate_plan_file(load_plan_file(args.plan_file), require_messages=False)
+    payload = ok_payload(**build_message_template(plan))
+    maybe_write_output(payload, args.out)
+    return 0
+
+
 def command_apply_plan(args: argparse.Namespace) -> int:
-    plan = validate_plan_file(load_plan_file(args.plan_file), require_messages=True)
+    messages_file = getattr(args, "messages_file", None)
+    plan = validate_plan_file(load_plan_file(args.plan_file), require_messages=not bool(messages_file))
+    if messages_file:
+        plan = merge_message_file(plan, load_message_file(messages_file))
     repo = repo_root(args.repo or str(plan["repo"]))
     if repo != plan["repo"]:
         raise SkillError(
@@ -198,13 +214,22 @@ def add_coverage_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]
     parser.add_argument("--planned", action="append", default=[])
     parser.add_argument("--exclude", action="append", default=[])
     parser.add_argument("--plan-file")
+    parser.add_argument("--messages-file")
     add_common_flags(parser)
     parser.set_defaults(func=command_coverage)
+
+
+def add_message_template_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    parser = sub.add_parser("message-template", help="Emit fixed candidate commits for AI message generation only")
+    parser.add_argument("--plan-file", required=True)
+    add_common_flags(parser)
+    parser.set_defaults(func=command_message_template)
 
 
 def add_apply_plan_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser("apply-plan", help="Execute a finalized plan JSON")
     parser.add_argument("--plan-file", required=True)
+    parser.add_argument("--messages-file")
     parser.add_argument("--repo")
     parser.add_argument("--sign-mode", choices=["auto", "signed", "unsigned"], default="auto")
     add_common_flags(parser)
@@ -234,6 +259,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_inventory_parser(sub)
     add_plan_parser(sub)
     add_coverage_parser(sub)
+    add_message_template_parser(sub)
     add_apply_plan_parser(sub)
     add_commit_parser(sub)
     return parser

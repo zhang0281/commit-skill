@@ -120,8 +120,16 @@ def apply_plan(plan: dict[str, object], sign_context: dict[str, object], sign_mo
     requested = sign_mode_override or str(plan.get("requested", {}).get("sign_mode", "auto"))
     effective_global = resolve_sign_mode(requested, sign_context)
     results: list[dict[str, object]] = []
+    message_coverage_audit = list(plan.get("message_coverage_audit", []))
     if not plan.get("commits"):
-        return ok_payload(repo=plan["repo"], sign_mode=requested, effective_sign_mode=effective_global, results=[], noop=True)
+        return ok_payload(
+            repo=plan["repo"],
+            sign_mode=requested,
+            effective_sign_mode=effective_global,
+            results=[],
+            message_coverage_audit=message_coverage_audit,
+            noop=True,
+        )
     for commit_entry in plan["commits"]:
         requested_mode = str(commit_entry.get("sign_mode") or requested)
         effective_mode = resolve_sign_mode(requested_mode, sign_context)
@@ -166,4 +174,10 @@ def apply_plan(plan: dict[str, object], sign_context: dict[str, object], sign_mo
             }
         )
 
-    return ok_payload(repo=plan["repo"], sign_mode=requested, effective_sign_mode=effective_global, results=results)
+    return ok_payload(
+        repo=plan["repo"],
+        sign_mode=requested,
+        effective_sign_mode=effective_global,
+        results=results,
+        message_coverage_audit=message_coverage_audit,
+    )
