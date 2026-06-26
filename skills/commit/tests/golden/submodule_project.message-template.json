@@ -10,9 +10,10 @@
   "rules": [
     "只填写 commits[].id/type/title/bullets。",
     "不得新增、删除、合并、拆分或重排 commit。",
-    "title 只写 Conventional Commit 冒号后的中文标题正文。",
-    "bullets 为字符串数组，可留空。",
-    "优先直接复用 must_cover.bullets；若遗漏，脚本会在 apply-plan 前自动补齐。"
+    "title 只写 Conventional Commit 冒号后的中文标题正文，需要准确概括本次变更的核心意图。",
+    "bullets 为字符串数组；基于 diff_summary 提炼变更的语义描述，说明做了什么、为什么做，而非罗列路径或计数。",
+    "禁止直接使用 '涉及 X'、'处理 N 个文件改动'、'包含 X 改动' 这类结构性描述作为 bullets。",
+    "type 应根据变更实质选择：新功能用 feat，修复用 fix，文档用 docs，重构用 refactor，测试用 test，杂项用 chore。"
   ],
   "commits": [
     {
@@ -23,20 +24,20 @@
       "paths_preview": [
         "module.txt"
       ],
+      "diff_summary": {
+        "stat_lines": [
+          " module.txt | 2 +-"
+        ],
+        "file_actions": [
+          "修改 module.txt"
+        ],
+        "summary": "修改 module.txt"
+      },
       "type_hint": "chore",
       "title_hint": "更新子模块 vendor/child 内部改动",
       "bullet_hints": [
         "处理子模块 vendor/child 内部文件变更"
       ],
-      "must_cover": {
-        "id": "submodule-internal:vendor/child",
-        "bullets": [
-          "涉及子模块 vendor/child",
-          "处理子模块 vendor/child 内部 1 个文件改动",
-          "包含 代码 改动"
-        ],
-        "recommended_max_bullets": 3
-      },
       "type": "",
       "title": "",
       "bullets": []
@@ -49,20 +50,20 @@
       "paths_preview": [
         "vendor/child"
       ],
+      "diff_summary": {
+        "stat_lines": [
+          " vendor/child | 0"
+        ],
+        "file_actions": [
+          "修改 vendor/child"
+        ],
+        "summary": "修改 vendor/child"
+      },
       "type_hint": "chore",
       "title_hint": "同步 1 个子模块引用",
       "bullet_hints": [
         "更新 vendor/child 的 gitlink 指针"
       ],
-      "must_cover": {
-        "id": "repo:submodule-pointers",
-        "bullets": [
-          "涉及 vendor",
-          "同步 1 个子模块 gitlink 指针",
-          "包含 子模块引用 改动"
-        ],
-        "recommended_max_bullets": 3
-      },
       "type": "",
       "title": "",
       "bullets": []

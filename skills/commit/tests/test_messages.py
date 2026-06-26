@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1] / "scripts"
 if str(ROOT) not in sys.path:
@@ -12,6 +13,14 @@ if str(ROOT) not in sys.path:
 
 from lib.errors import ErrorCode, SkillError
 from lib.messages import apply_message_coverage, build_message_template, load_message_file, merge_message_file, validate_message_file
+
+
+def mock_diff_stat_lines(repo_path: str, paths: list[str]) -> list[str]:
+    return [f" {path} | 10 +++" for path in paths[:20]]
+
+
+def mock_diff_name_status(repo_path: str, paths: list[str]) -> list[dict[str, str]]:
+    return [{"status": "M", "path": path} for path in paths]
 
 
 class MessageLibTest(unittest.TestCase):
@@ -51,13 +60,17 @@ class MessageLibTest(unittest.TestCase):
             },
         }
 
-    def test_build_message_template(self) -> None:
+    @patch("lib.messages.diff_stat_lines", side_effect=mock_diff_stat_lines)
+    @patch("lib.messages.diff_name_status", side_effect=mock_diff_name_status)
+    def test_build_message_template(self, mock_ns, mock_stat) -> None:
         payload = build_message_template(self.plan)
         self.assertEqual(payload["mode"], "message-only")
         self.assertEqual([item["id"] for item in payload["commits"]], ["repo:docs", "repo:code:src"])
         self.assertEqual(payload["commits"][0]["type"], "")
-        self.assertIn("must_cover", payload["commits"][0])
-        self.assertTrue(payload["commits"][0]["must_cover"]["bullets"])
+        self.assertIn("diff_summary", payload["commits"][0])
+        self.assertNotIn("must_cover", payload["commits"][0])
+        self.assertTrue(payload["commits"][0]["diff_summary"]["file_actions"])
+        self.assertTrue(payload["commits"][0]["diff_summary"]["stat_lines"])
 
     def test_validate_and_merge_message_file(self) -> None:
         messages = {
@@ -73,7 +86,10 @@ class MessageLibTest(unittest.TestCase):
         self.assertEqual(merged["commits"][0]["type"], "docs")
         self.assertEqual(merged["commits"][1]["title"], "整理代码改动")
         self.assertIn("message_coverage_audit", merged)
-        self.assertTrue(any("涉及" in bullet or "包含" in bullet for bullet in merged["commits"][0]["bullets"]))
+        # commits[0] has non-empty bullets from AI → no structural fallback appended
+        self.assertEqual(merged["commits"][0]["bullets"], ["补齐说明"])
+        # commits[1] has empty bullets → structural fallback appended
+        self.assertTrue(any("涉及" in bullet or "包含" in bullet for bullet in merged["commits"][1]["bullets"]))
 
     def test_validate_rejects_reordered_ids(self) -> None:
         messages = {
@@ -114,3 +130,26 @@ class MessageLibTest(unittest.TestCase):
         )
         self.assertIn("message_coverage_audit", merged)
         self.assertTrue(merged["commits"][0]["bullets"])
+
+    @patch("lib.messages.diff_stat_lines", side_effect=mock_diff_stat_lines)
+    @patch("lib.messages.diff_name_status", side_effect=mock_diff_name_status)
+    def test_diff_summary_contains_semantic_info(self, mock_ns, mock_stat) -> None:
+        payload = build_message_template(self.plan)
+        commit = payload["commits"][0]
+        self.assertIn("diff_summary", commit)
+        ds = commit["diff_summary"]
+        self.assertIn("stat_lines", ds)
+        self.assertIn("file_actions", ds)
+        self.assertIn("summary", ds)
+        self.assertEqual(ds["file_actions"], ["修改 README.md"])
+        self.assertIn("README.md", ds["summary"])
+
+    @patch("lib.messages.diff_stat_lines", side_effect=mock_diff_stat_lines)
+    @patch("lib.messages.diff_name_status", side_effect=mock_diff_name_status)
+    def test_rules_forbid_structural_bullets(self, mock_ns, mock_stat) -> None:
+        payload = build_message_template(self.plan)
+        rules_text = " ".join(payload["rules"])
+        self.assertIn("禁止", rules_text)
+        self.assertIn("涉及 X", rules_text)
+        self.assertNotIn("must_cover", rules_text)
+        self.assertNotIn("优先直接复用", rules_text)

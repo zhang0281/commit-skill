@@ -66,10 +66,14 @@ python3 "$COMMIT_SKILL_SCRIPT" message-template --plan-file /tmp/commit-plan-<re
 {
   "commits": [
     {
-      "id": "repo:docs",
-      "type": "docs",
-      "title": "更新说明文档",
-      "bullets": ["补齐使用说明"]
+      "id": "repo:single",
+      "type": "feat",
+      "title": "新增 Slint 原生 GUI 替代 Tauri 部署界面",
+      "bullets": [
+        "使用 Slint 1.9 + Fluent 主题，软件渲染器零 GPU 依赖",
+        "四步向导界面：路径选择 → 环境检测 → 确认配置 → 进度日志",
+        "EventSink bridge 模式实现 backend → UI 异步更新"
+      ]
     }
   ]
 }
@@ -77,10 +81,13 @@ python3 "$COMMIT_SKILL_SCRIPT" message-template --plan-file /tmp/commit-plan-<re
 
 message 建议：
 
-- 以 **1 个 title + 0~2 个 bullets** 为默认
-- bullets 宜短，不宜铺陈成长段
-- 若用户未明确要求详细审计说明，优先更短的 message，以减少 token 与生成时间
-- `must_cover.bullets` 是最低覆盖面；能直接复用则直接复用
+- title 必须准确概括本次变更的核心意图，不可使用 "整理改动"、"更新文档" 等泛化描述
+- bullets 基于 `diff_summary` 提炼变更的语义：做了什么、为什么做、影响了什么
+- **禁止**直接使用 "涉及 X"、"处理 N 个文件改动"、"包含 X 改动" 这类结构性元数据作为 bullets
+- 以 **1 个 title + 1~4 个 bullets** 为默认；大改动可适当增加 bullets
+- 若变更涉及新增能力、架构调整、行为变化，bullets 应说明具体新增/调整了什么
+- `diff_summary.file_actions` 列出了每个文件的新增/修改/删除状态，用于理解变更范围
+- `diff_summary.stat_lines` 提供了变更行数统计，用于判断改动量级
 
 ### 3) 交给脚本执行
 
@@ -95,7 +102,7 @@ python3 "$COMMIT_SKILL_SCRIPT" apply-plan \
 
 - merge `messages.json`
 - 校验 id 集合、字段白名单、message 合法性
-- 执行 message coverage audit：若 `must_cover` 中的关键变更面未体现在 title/bullets，中间脚本会自动补齐 bullets
+- 执行 message coverage audit：若关键变更面（路径覆盖、分类覆盖）未被 title/bullets 覆盖，脚本会自动追加结构性兜底 bullets
 - coverage audit
 - submodule 顺序校验
 - signing / fallback

@@ -7,6 +7,7 @@ from pathlib import Path
 from .inventory import classify_path, top_level_groups
 from .coverage import validate_message_fields, validate_plan_file
 from .errors import ErrorCode, SkillError
+from .process import diff_stat_lines, diff_name_status
 
 MESSAGE_SCHEMA_VERSION = 1
 TEMPLATE_ONLY_KEYS = {
@@ -14,6 +15,7 @@ TEMPLATE_ONLY_KEYS = {
     "scope_hint",
     "paths_count",
     "paths_preview",
+    "diff_summary",
     "type_hint",
     "title_hint",
     "bullet_hints",
@@ -100,21 +102,32 @@ def apply_message_coverage(plan: dict[str, object]) -> dict[str, object]:
     audits: list[dict[str, object]] = []
     for commit in audited.get("commits", []):
         must_cover = build_commit_must_cover(audited, commit)
-        combined = "\n".join([str(commit.get("title", "")), *[str(item) for item in commit.get("bullets", [])]])
         existing_bullets = [str(item) for item in commit.get("bullets", [])]
-        missing = [bullet for bullet in must_cover["bullets"] if bullet not in combined]
-        for bullet in missing:
-            if bullet not in existing_bullets:
-                existing_bullets.append(bullet)
-        commit["bullets"] = existing_bullets
-        commit["must_cover"] = must_cover
-        audits.append(
-            {
-                "id": str(commit.get("id", "")),
-                "auto_appended_bullets": missing,
-                "final_bullets": existing_bullets,
-            }
-        )
+        if existing_bullets:
+            commit["must_cover"] = must_cover
+            audits.append(
+                {
+                    "id": str(commit.get("id", "")),
+                    "auto_appended_bullets": [],
+                    "final_bullets": existing_bullets,
+                    "skipped_reason": "AI 已提供语义 bullets，跳过结构性兜底追加",
+                }
+            )
+        else:
+            combined = "\n".join([str(commit.get("title", "")), *existing_bullets])
+            missing = [bullet for bullet in must_cover["bullets"] if bullet not in combined]
+            for bullet in missing:
+                if bullet not in existing_bullets:
+                    existing_bullets.append(bullet)
+            commit["bullets"] = existing_bullets
+            commit["must_cover"] = must_cover
+            audits.append(
+                {
+                    "id": str(commit.get("id", "")),
+                    "auto_appended_bullets": missing,
+                    "final_bullets": existing_bullets,
+                }
+            )
     audited["message_coverage_audit"] = audits
     return audited
 
@@ -132,11 +145,28 @@ def load_message_file(path: str) -> dict[str, object]:
     return data
 
 
+def build_diff_summary(repo_path: str, paths: list[str]) -> dict[str, object]:
+    stat_lines = diff_stat_lines(repo_path, paths)
+    name_status = diff_name_status(repo_path, paths)
+    status_map = {"A": "新增", "M": "修改", "D": "删除", "R": "重命名"}
+    file_actions = []
+    for entry in name_status:
+        action = status_map.get(entry["status"][0], "变更")
+        file_actions.append(f"{action} {entry['path']}")
+    return {
+        "stat_lines": stat_lines,
+        "file_actions": file_actions[:20],
+        "summary": "; ".join(file_actions[:10]) if file_actions else "",
+    }
+
+
 def build_message_template(plan: dict[str, object]) -> dict[str, object]:
     validated = validate_plan_file(plan, require_messages=False)
     commits: list[dict[str, object]] = []
     for commit in validated["commits"]:
         paths = [str(path) for path in commit.get("paths", [])]
+        repo_path = str(commit.get("repo_path", validated["repo"]))
+        diff_summary = build_diff_summary(repo_path, paths)
         commits.append(
             {
                 "id": str(commit.get("id", "")),
@@ -144,10 +174,10 @@ def build_message_template(plan: dict[str, object]) -> dict[str, object]:
                 "scope_hint": str(commit.get("submodule_path") or commit.get("category") or commit.get("kind") or "repo"),
                 "paths_count": len(paths),
                 "paths_preview": paths[:12],
+                "diff_summary": diff_summary,
                 "type_hint": str(commit.get("type_hint", "")),
                 "title_hint": str(commit.get("title_hint", "")),
                 "bullet_hints": [str(item) for item in commit.get("bullet_hints", [])[:6]],
-                "must_cover": build_commit_must_cover(validated, commit),
                 "type": "",
                 "title": "",
                 "bullets": [],
@@ -162,9 +192,10 @@ def build_message_template(plan: dict[str, object]) -> dict[str, object]:
         "rules": [
             "只填写 commits[].id/type/title/bullets。",
             "不得新增、删除、合并、拆分或重排 commit。",
-            "title 只写 Conventional Commit 冒号后的中文标题正文。",
-            "bullets 为字符串数组，可留空。",
-            "优先直接复用 must_cover.bullets；若遗漏，脚本会在 apply-plan 前自动补齐。",
+            "title 只写 Conventional Commit 冒号后的中文标题正文，需要准确概括本次变更的核心意图。",
+            "bullets 为字符串数组；基于 diff_summary 提炼变更的语义描述，说明做了什么、为什么做，而非罗列路径或计数。",
+            "禁止直接使用 '涉及 X'、'处理 N 个文件改动'、'包含 X 改动' 这类结构性描述作为 bullets。",
+            "type 应根据变更实质选择：新功能用 feat，修复用 fix，文档用 docs，重构用 refactor，测试用 test，杂项用 chore。",
         ],
         "commits": commits,
     }

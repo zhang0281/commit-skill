@@ -10,9 +10,10 @@
   "rules": [
     "只填写 commits[].id/type/title/bullets。",
     "不得新增、删除、合并、拆分或重排 commit。",
-    "title 只写 Conventional Commit 冒号后的中文标题正文。",
-    "bullets 为字符串数组，可留空。",
-    "优先直接复用 must_cover.bullets；若遗漏，脚本会在 apply-plan 前自动补齐。"
+    "title 只写 Conventional Commit 冒号后的中文标题正文，需要准确概括本次变更的核心意图。",
+    "bullets 为字符串数组；基于 diff_summary 提炼变更的语义描述，说明做了什么、为什么做，而非罗列路径或计数。",
+    "禁止直接使用 '涉及 X'、'处理 N 个文件改动'、'包含 X 改动' 这类结构性描述作为 bullets。",
+    "type 应根据变更实质选择：新功能用 feat，修复用 fix，文档用 docs，重构用 refactor，测试用 test，杂项用 chore。"
   ],
   "commits": [
     {
@@ -26,20 +27,26 @@
         "docs/guide.md",
         "src/app.py"
       ],
+      "diff_summary": {
+        "stat_lines": [
+          " .gitignore (new file)",
+          " README.md (new file)",
+          " docs/guide.md (new file)",
+          " src/app.py (new file)"
+        ],
+        "file_actions": [
+          "新增 .gitignore",
+          "新增 README.md",
+          "新增 docs/guide.md",
+          "新增 src/app.py"
+        ],
+        "summary": "新增 .gitignore; 新增 README.md; 新增 docs/guide.md; 新增 src/app.py"
+      },
       "type_hint": "chore",
       "title_hint": "整理本次改动",
       "bullet_hints": [
         "处理 4 个根仓文件改动"
       ],
-      "must_cover": {
-        "id": "repo:single",
-        "bullets": [
-          "涉及 .、docs、src",
-          "处理 4 个根仓文件改动",
-          "包含 文档、配置、代码 改动"
-        ],
-        "recommended_max_bullets": 3
-      },
       "type": "",
       "title": "",
       "bullets": []
