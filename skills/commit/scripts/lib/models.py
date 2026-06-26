@@ -24,8 +24,9 @@ class CommitPlan:
     @property
     def message_args(self) -> list[str]:
         args = ["-m", f"{self.commit_type}: {self.title}"]
-        for bullet in self.bullets:
-            args.extend(["-m", bullet])
+        if self.bullets:
+            body = "\n".join(f"- {bullet}" for bullet in self.bullets)
+            args.extend(["-m", body])
         return args
 
 
