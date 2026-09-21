@@ -1,6 +1,6 @@
 # Plan JSON Schema
 
-Read this when editing `/tmp/commit-plan-<repo_hash>.json`, fixing coverage gaps, or validating whether a path belongs to the initial snapshot. Default fast path should prefer `message-template` + `messages-file`; full plan editing is now the debug path.
+Read this when editing `/tmp/commit-plan-<repo_hash>.json`, fixing coverage gaps, or validating whether a path belongs to the initial snapshot. Default fast path should prefer `commit-session`; `/tmp/commit-messages-<random>.json` + `fast-commit` is the non-interactive fallback. Full plan editing is now the debug path.
 
 ## Core shape
 

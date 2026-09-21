@@ -108,7 +108,8 @@ class ApplyPlanTest(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        messages_file = self.repo / "messages.json"
+        messages_file = Path(tempfile.gettempdir()) / f"commit-messages-{self.repo.name}Apply.json"
+        self.addCleanup(messages_file.unlink, missing_ok=True)
         messages_file.write_text(
             json.dumps(
                 {
@@ -151,8 +152,121 @@ class ApplyPlanTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         log = subprocess.run(["git", "-C", str(self.repo), "log", "--oneline", "-1"], capture_output=True, text=True, check=True)
         self.assertIn("feat: 初始化测试仓库", log.stdout)
+
+    def test_fast_commit_prepares_and_applies_in_one_invocation(self) -> None:
+        messages_file = Path(tempfile.gettempdir()) / f"commit-messages-{self.repo.name}Merge.json"
+        self.addCleanup(messages_file.unlink, missing_ok=True)
+        messages_file.write_text(
+            json.dumps(
+                {
+                    "repo": str(self.repo),
+                    "commits": [
+                        {
+                            "id": "repo:single",
+                            "type": "feat",
+                            "title": "初始化测试仓库",
+                            "bullets": ["新增 README 与 demo 脚本"],
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        plan_file = self.repo.parent / f"{self.repo.name}-fast-plan.json"
+        result = subprocess.run(
+            [
+                "python3",
+                "-B",
+                str(SCRIPT),
+                "fast-commit",
+                "--repo",
+                str(self.repo),
+                "--messages-file",
+                str(messages_file),
+                "--plan-file",
+                str(plan_file),
+                "--exclude",
+                "plan.json",
+                "--sign-mode",
+                "unsigned",
+                "--json",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["plan_file"], str(plan_file))
+        log = subprocess.run(["git", "-C", str(self.repo), "log", "--oneline", "-1"], capture_output=True, text=True, check=True)
+        self.assertIn("feat: 初始化测试仓库", log.stdout)
         self.assertIn("message_coverage_audit", payload)
         self.assertTrue(payload["message_coverage_audit"])
+
+    def test_commit_session_round_trip_uses_one_process(self) -> None:
+        plan_file = Path(tempfile.gettempdir()) / f"{self.repo.name}-session-plan.json"
+        self.addCleanup(plan_file.unlink, missing_ok=True)
+        process = subprocess.Popen(
+            [
+                "python3",
+                "-B",
+                str(SCRIPT),
+                "commit-session",
+                "--repo",
+                str(self.repo),
+                "--plan-file",
+                str(plan_file),
+                "--exclude",
+                "plan.json",
+                "--sign-mode",
+                "unsigned",
+                "--json",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        self.assertIsNotNone(process.stdin)
+        self.assertIsNotNone(process.stdout)
+        prepared = json.loads(process.stdout.readline())
+        self.assertEqual(prepared["phase"], "prepared")
+        self.assertEqual(prepared["message_template"]["mode"], "message-only")
+        messages_file = Path(prepared["messages_file"])
+        self.assertEqual(messages_file.parent, Path(tempfile.gettempdir()))
+        self.assertRegex(messages_file.name, r"^commit-messages-[A-Za-z0-9_-]{6,}\.json$")
+        process.stdin.write(
+            json.dumps(
+                {
+                    "commits": [
+                        {
+                            "id": "repo:single",
+                            "type": "feat",
+                            "title": "初始化测试仓库",
+                            "bullets": ["新增 README 与 demo 脚本"],
+                        }
+                    ]
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+        process.stdin.flush()
+        process.stdin.close()
+        trailing = process.stdout.read().splitlines()
+        process.stdout.close()
+        returncode = process.wait(timeout=10)
+        stderr = process.stderr.read()
+        process.stderr.close()
+        self.assertEqual(returncode, 0, stderr)
+        complete = json.loads(trailing[-1])
+        self.assertEqual(complete["phase"], "complete")
+        self.assertTrue(complete["messages_file_removed"])
+        self.assertFalse(messages_file.exists())
+        log = subprocess.run(["git", "-C", str(self.repo), "log", "--oneline", "-1"], capture_output=True, text=True, check=True)
+        self.assertIn("feat: 初始化测试仓库", log.stdout)
 
     def test_apply_plan_handles_already_staged_deletions(self) -> None:
         (self.repo / "obsolete.txt").write_text("old\n", encoding="utf-8")

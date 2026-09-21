@@ -35,7 +35,8 @@
  - `message-template` 负责把 plan 缩成 AI 专用的最小 message 模板
  - AI 只填写 `id/type/title/bullets`
  - `apply-plan --messages-file` 负责 merge、校验与执行
- - 默认自动跑 `plan --summary-only`，向模型提供精简 summary，同时把完整 JSON 写 `/tmp/commit-plan-<repo_hash>.json` 供后续复用
+ - `prepare` 将 plan summary 与 message template 合并为一次脚本调用，同时把完整 JSON 写 `/tmp/commit-plan-<repo_hash>.json`
+ - 真正的 `git add/commit` 始终由 `apply-plan` 内部脚本执行，AI 不直接执行 Git 命令
 
 4. **固定默认提交边界**
    - 单项目根仓改动统一收为 1 个根仓 commit
@@ -76,6 +77,24 @@
 12. **渐进披露文档结构**
    - 高频触发的 `SKILL.md` 只保留主流程与引用导航
    - schema / signing / submodule / error codes / safety 细则拆入 `references/`，按需读取
+
+13. **模板调试准备阶段**
+   - `prepare` 在同一进程内完成 inventory、candidate 固化、plan 落盘与 message template 生成
+   - `message-template` 与 `plan --summary-only` 仍保留作为调试与兼容入口
+
+14. **默认 one-process session**
+   - `commit-session` 先固化 snapshot，再通过首行 `phase=prepared` 输出 message template
+   - AI 通过同一进程 stdin 回写最小 messages JSON；脚本随后完成 merge、coverage、snapshot drift、signing 与 `git commit`
+   - session messages 文件由脚本放在 `/tmp/commit-messages-<random>.json`，随机后缀至少 6 位，成功后清理
+   - `fast-commit` 保留为宿主无法保持 stdin 时的非交互兼容入口
+
+### 2026-09-21 - 默认 one-process commit session
+
+**变更内容**: 新增 `commit-session` 子命令，先输出固定 snapshot 与 message template，再从同一 stdin 接收 AI message，并在同一进程中完成 merge、coverage、签名与真正的 `git add/commit`；保留 `fast-commit` 作为非交互兼容路径。
+
+**变更理由**: 消除 AI 生成 message 与 snapshot 固化之间的竞态，并减少进程启动与 plan/template 重复传递；随机临时文件名避免并发与残留文件冲突。
+
+**影响范围**: `skills/commit/scripts/lib/cli.py`、`skills/commit/tests/test_cli_lib.py`、`skills/commit/tests/test_apply_plan.py`、`skills/commit/SKILL.md`、`skills/commit/agents/openai.yaml`、`README.md`、`DESIGN.md`。
 
 ## 已知限制
 

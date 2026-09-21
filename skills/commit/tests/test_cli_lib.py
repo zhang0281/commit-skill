@@ -36,6 +36,12 @@ class CliLibTest(unittest.TestCase):
         self.assertEqual(args2.command, "commit")
         args3 = parser.parse_args(["plan", "--repo", "/tmp/x", "--summary-only"])
         self.assertTrue(args3.summary_only)
+        args_prepare = parser.parse_args(["prepare", "--repo", "/tmp/x"])
+        self.assertEqual(args_prepare.command, "prepare")
+        args_fast = parser.parse_args(["fast-commit", "--repo", "/tmp/x", "--messages-file", "/tmp/commit-messages-Ab12Cd.json"])
+        self.assertEqual(args_fast.command, "fast-commit")
+        args_session = parser.parse_args(["commit-session", "--repo", "/tmp/x"])
+        self.assertEqual(args_session.command, "commit-session")
         args4 = parser.parse_args(["message-template", "--plan-file", "/tmp/p.json"])
         self.assertEqual(args4.command, "message-template")
 
@@ -80,6 +86,50 @@ class CliLibTest(unittest.TestCase):
             self.assertEqual(cli.command_plan(ns), 0)
             write_out.assert_called_once()
             write_json.assert_called_once()
+
+        ns_prepare = argparse.Namespace(repo="/repo", include=[], exclude=[], split_mode="auto", sign_mode="auto", out=None, json=True)
+        with mock.patch.object(cli, "repo_root", return_value="/repo"), \
+             mock.patch.object(cli, "build_plan", return_value={"commits": [], "inventory": {"changed_files": [], "root_changed_files": [], "submodules": [], "top_level_groups": {}}, "repo": "/repo", "branch": "main", "requested": {"split_mode": "auto", "sign_mode": "auto"}, "sign_context": {}, "ok": True, "error_code": "OK", "exit_code": 0}), \
+             mock.patch.object(cli, "build_message_template", return_value={"mode": "message-only"}), \
+             mock.patch.object(cli, "maybe_write_output") as write_out, \
+             mock.patch.object(cli, "write_json_file") as write_json:
+            self.assertEqual(cli.command_prepare(ns_prepare), 0)
+            write_out.assert_called_once()
+            write_json.assert_called_once()
+
+        ns_fast = argparse.Namespace(
+            repo="/repo",
+            messages_file="/tmp/commit-messages-Ab12Cd.json",
+            plan_file="/tmp/plan.json",
+            include=[],
+            exclude=[],
+            split_mode="auto",
+            sign_mode="auto",
+            out=None,
+            json=True,
+        )
+        ns_fast_same_path = argparse.Namespace(**{**vars(ns_fast), "plan_file": "/tmp/commit-messages-Ab12Cd.json"})
+        with mock.patch.object(cli, "repo_root", return_value="/repo"):
+            with self.assertRaises(SkillError) as ctx:
+                cli.command_fast_commit(ns_fast_same_path)
+            self.assertEqual(ctx.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        ns_fast_bad_path = argparse.Namespace(**{**vars(ns_fast), "messages_file": "/tmp/messages.json"})
+        with mock.patch.object(cli, "repo_root", return_value="/repo"):
+            with self.assertRaises(SkillError) as ctx:
+                cli.command_fast_commit(ns_fast_bad_path)
+            self.assertEqual(ctx.exception.code, ErrorCode.INVALID_ARGUMENT)
+
+        with mock.patch.object(cli, "repo_root", return_value="/repo"), \
+             mock.patch.object(cli, "build_snapshot_plan", return_value={"repo": "/repo", "commits": [], "exclude": []}), \
+             mock.patch.object(cli, "validate_plan_file", side_effect=lambda data, require_messages=False: data), \
+             mock.patch.object(cli, "load_message_file", return_value={"commits": []}), \
+             mock.patch.object(cli, "merge_message_file", return_value={"repo": "/repo", "commits": []}), \
+             mock.patch.object(cli, "detect_signing", return_value={"suggested_sign_mode": "unsigned"}), \
+             mock.patch.object(cli, "apply_plan", return_value={"ok": True}), \
+             mock.patch.object(cli, "maybe_write_output") as write_out:
+            self.assertEqual(cli.command_fast_commit(ns_fast), 0)
+            write_out.assert_called_once()
 
         ns_summary = argparse.Namespace(repo="/repo", include=[], exclude=[], split_mode="auto", sign_mode="auto", out="/tmp/plan.json", json=True, summary_only=True)
         with mock.patch.object(cli, "repo_root", return_value="/repo"), \

@@ -11,12 +11,12 @@ description: 拆分并创建规范 Git 提交。Use when Codex or Claude Code ne
 
 - **AI 只负责**：生成每个固定 candidate commit 的 `type/title/bullets`。
 - **脚本负责**：扫描、候选 commit 固化、message template、message merge、coverage、signing、submodule 顺序、`git add/commit`。
-- **默认快路**：`plan --summary-only → message-template → AI 填 messages.json → apply-plan --messages-file`。
+- **默认快路**：`commit-session` 单进程交互链；脚本先固化 snapshot 并输出 template，AI 回写 message 后同一进程完成 apply 与最终核验。
 - **默认边界**：
   - 单项目根仓改动：固定 **1 个 commit**
   - 多子模块改动：固定为 **每个 dirty 子模块 1 个 internal commit**，再加 **1 个根仓 pointer commit** 统一记录 gitlink
 - **硬限制**：不得让 AI 改 `paths/repo_path/sign_mode/coverage_baseline`，不得让 AI 合并、拆分、增删、重排 commit。
-- **执行约束**：不要手写 Git 命令；不要启用子代理；不要输出冗长过程说明。
+- **执行约束**：不要手写会改变仓库状态的 Git 命令；只读 diff/status 可用于生成 message；不要启用子代理；不要输出冗长过程说明。
 
 ## 资源路径解析（防止误找项目目录）
 
@@ -41,26 +41,21 @@ description: 拆分并创建规范 Git 提交。Use when Codex or Claude Code ne
 
 ## 默认执行链
 
-### 1) 固定候选 commit
+### 1) 启动 commit-session 并固化 snapshot
+
+一次调用脚本：
 
 ```bash
-python3 "$COMMIT_SKILL_SCRIPT" plan --repo . --summary-only
+python3 "$COMMIT_SKILL_SCRIPT" commit-session --repo . --json
 ```
 
-要点：
+脚本首行输出 `phase=prepared` JSON，内含固定 `plan_file`、位于 `/tmp` 且带随机后缀的 `messages_file`，以及供 AI 阅读的 `message_template`。此时 snapshot 已经固化。
 
-- `summary.plan_file` 是后续唯一计划文件。
-- `candidate_commits` 已固定本轮 commit 边界；默认不再让 AI 讨论是否合并/拆分。
-- 根仓默认只生成一个 commit；子模块默认每个 dirty submodule 一个 internal commit，最后根仓再统一提交 gitlink pointer。
-- `changed_count=0` 时直接结束。
+若 `changed_count=0`，脚本直接输出 `phase=complete` 的 `noop` 结果，不等待 stdin。
 
-### 2) 生成 AI message template
+### 2) AI 回写 messages JSON
 
-```bash
-python3 "$COMMIT_SKILL_SCRIPT" message-template --plan-file /tmp/commit-plan-<repo_hash>.json
-```
-
-让 AI **只返回**：
+AI 读取 `phase=prepared` 后，只向同一进程 stdin 写入一个 messages JSON 对象：
 
 ```json
 {
@@ -79,42 +74,49 @@ python3 "$COMMIT_SKILL_SCRIPT" message-template --plan-file /tmp/commit-plan-<re
 }
 ```
 
+`id` 必须遵循 planner 的确定性规则：根仓文件或根仓文件 + pointer 为 `repo:single`；子模块内部提交为 `submodule-internal:<path>`；仅根仓 pointer 为 `repo:submodule-pointers`。AI 不得自行增删、合并、拆分或重排 candidate。
+
 message 建议：
 
 - title 必须准确概括本次变更的核心意图，不可使用 "整理改动"、"更新文档" 等泛化描述
-- bullets 基于 `diff_summary` 提炼变更的语义：做了什么、为什么做、影响了什么
+- bullets 基于只读 diff 提炼变更的语义：做了什么、为什么做、影响了什么
 - **禁止**直接使用 "涉及 X"、"处理 N 个文件改动"、"包含 X 改动" 这类结构性元数据作为 bullets
 - 以 **1 个 title + 1~4 个 bullets** 为默认；大改动可适当增加 bullets
 - 若变更涉及新增能力、架构调整、行为变化，bullets 应说明具体新增/调整了什么
-- `diff_summary.file_actions` 列出了每个文件的新增/修改/删除状态，用于理解变更范围
-- `diff_summary.stat_lines` 提供了变更行数统计，用于判断改动量级
+- 需要脚本提供 `diff_summary` 时，切回 `prepare` + `message-template` 调试路径
 
-### 3) 交给脚本执行
+### 3) 同一进程完成 apply-plan
 
-```bash
-python3 "$COMMIT_SKILL_SCRIPT" apply-plan \
-  --plan-file /tmp/commit-plan-<repo_hash>.json \
-  --messages-file /tmp/commit-messages.json \
-  --json
-```
+将上述 JSON 通过同一 `commit-session` 进程的 stdin 写回后，脚本输出 `phase=complete`，并自动完成：
 
-`apply-plan` 会自动完成：
-
-- merge `messages.json`
+- merge `/tmp/commit-messages-<random>.json`
 - 校验 id 集合、字段白名单、message 合法性
 - 执行 message coverage audit：若关键变更面（路径覆盖、分类覆盖）未被 title/bullets 覆盖，脚本会自动追加结构性兜底 bullets
 - coverage audit
 - submodule 顺序校验
 - signing / fallback
-- 真正的 `git commit`
+- 最终 coverage / snapshot drift 核验
+- 真正的 `git add/commit`
+
+若宿主无法保持 stdin 进程，可退回一次性兼容入口：
+
+```bash
+python3 "$COMMIT_SKILL_SCRIPT" fast-commit \
+  --repo . \
+  --messages-file /tmp/commit-messages-<random>.json \
+  --json
+```
 
 ## 手动调试子命令
 
 ```bash
 python3 "$COMMIT_SKILL_SCRIPT" inventory --repo . --json
+python3 "$COMMIT_SKILL_SCRIPT" prepare --repo . --out /tmp/commit-plan-<repo_hash>.json --json
+python3 "$COMMIT_SKILL_SCRIPT" commit-session --repo . --json
+python3 "$COMMIT_SKILL_SCRIPT" fast-commit --repo . --messages-file /tmp/commit-messages-<random>.json --json
 python3 "$COMMIT_SKILL_SCRIPT" plan --repo . --out /tmp/commit-plan-<repo_hash>.json --json
 python3 "$COMMIT_SKILL_SCRIPT" message-template --plan-file /tmp/commit-plan-<repo_hash>.json --json
-python3 "$COMMIT_SKILL_SCRIPT" coverage --plan-file /tmp/commit-plan-<repo_hash>.json --messages-file /tmp/commit-messages.json --json
+python3 "$COMMIT_SKILL_SCRIPT" coverage --plan-file /tmp/commit-plan-<repo_hash>.json --messages-file /tmp/commit-messages-<random>.json --json
 python3 "$COMMIT_SKILL_SCRIPT" commit --repo . \
   --file src/api.py \
   --type fix \
@@ -125,7 +127,7 @@ python3 "$COMMIT_SKILL_SCRIPT" commit --repo . \
 
 ## 何时读取 references
 
-- `message-template` 之外还想手改完整 plan：读 `references/plan-schema.md`。此路仅作调试，不是默认快路。
+- 需要静态调试完整 plan 时，使用 `prepare` + `apply-plan`；需要非交互一次性执行时，使用 `fast-commit`；均非默认快路。
 - 签名、GPG、fallback、`sign_mode`：读 `references/signing.md`。
 - submodule internal / pointer、submodule include/exclude：读 `references/submodules.md`。
 - 非零错误码、`ok=false`、`passed=false`：读 `references/error-codes.md`。

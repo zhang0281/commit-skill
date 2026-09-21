@@ -68,6 +68,24 @@ class GoldenOutputTest(unittest.TestCase):
             self.assertEqual(normalize_payload(plan_payload, replacements), load_golden("single_project.plan.json"))
             self.assertEqual(normalize_payload(message_payload, replacements), load_golden("single_project.message-template.json"))
 
+    def test_prepare_combines_plan_and_message_template(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            repo = Path(td) / "repo"
+            repo.mkdir()
+            subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, capture_output=True, text=True)
+            subprocess.run(["git", "-C", str(repo), "config", "commit.gpgsign", "false"], check=True)
+            (repo / "README.md").write_text("# demo\n", encoding="utf-8")
+
+            plan_file = Path(td) / "prepared-plan.json"
+            prepared = self.run_json("prepare", "--repo", str(repo), "--out", str(plan_file), "--json", "--sign-mode", "unsigned")
+            template = self.run_json("message-template", "--plan-file", str(plan_file), "--json")
+
+            self.assertTrue(prepared["ok"])
+            self.assertEqual(prepared["plan_file"], str(plan_file))
+            template_body = {key: template[key] for key in template if key not in {"ok", "error_code", "exit_code"}}
+            self.assertEqual(prepared["message_template"], template_body)
+            self.assertTrue(plan_file.exists())
+
     def test_submodule_project_plan_and_message_template(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             parent = Path(td) / "parent"

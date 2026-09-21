@@ -1,4 +1,4 @@
 interface:
   display_name: "Commit"
   short_description: "固定候选提交后，仅用 AI 生成 commit message，其余全部脚本执行"
-  default_prompt: "使用 fast-path：1) 运行 plan --summary-only 固定 candidate commits；2) 运行 message-template --plan-file，让 AI 只填写 commits[].id/type/title/bullets，禁止改 paths、repo_path、sign_mode、commit 数量与顺序；3) 运行 apply-plan --plan-file ... --messages-file ... --json，由脚本完成 merge、message coverage audit、coverage、submodule 顺序校验、signing 与 git commit。不要启用子代理，不要手写 git 命令。最终回复使用 summary/plan/result/remaining/next_step。"
+  default_prompt: "使用默认 commit-session 单进程链：1) 只调用一次 commit-session --repo . --json；2) 读取脚本首行 phase=prepared JSON，其中已有固定 snapshot、plan_file、随机 /tmp/commit-messages-<random>.json 路径与 message_template；3) 仅填写并通过同一进程 stdin 回写 commits[].id/type/title/bullets，id 必须遵循 repo:single、submodule-internal:<path>、repo:submodule-pointers 等 planner 确定性规则，禁止改 paths、repo_path、sign_mode、commit 数量与顺序；4) 读取 phase=complete 结果。脚本同一进程完成 message merge、coverage、snapshot drift、submodule 顺序、signing 与真正的 git commit。不要启用子代理，不要手写会改变仓库状态的 Git 命令；若宿主无法保持 stdin，才退回 fast-commit --messages-file /tmp/commit-messages-<random>.json。最终回复使用 summary/plan/result/remaining/next_step。"

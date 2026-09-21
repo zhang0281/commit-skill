@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import hashlib
 import json
+import os
+import re
+import sys
 import tempfile
 from pathlib import Path
 
@@ -14,6 +18,10 @@ from .messages import build_message_template, load_message_file, merge_message_f
 from .planner import build_plan
 from .process import repo_root
 from .signing import detect_signing
+
+
+FAST_MESSAGES_FILE_PATTERN = re.compile(r"commit-messages-[A-Za-z0-9_-]{6,}\.json\Z")
+FAST_MESSAGES_DIR = Path("/tmp")
 
 
 def maybe_write_output(payload: dict[str, object], out_path: str | None) -> None:
@@ -32,6 +40,17 @@ def write_json_file(payload: dict[str, object], out_path: str | None) -> None:
 def default_plan_file(repo: str) -> str:
     repo_hash = hashlib.sha256(repo.encode("utf-8", "surrogateescape")).hexdigest()[:12]
     return str(Path(tempfile.gettempdir(), f"commit-plan-{repo_hash}.json"))
+
+
+def allocate_temp_json(prefix: str) -> str:
+    fd, path = tempfile.mkstemp(prefix=prefix, suffix=".json", dir=str(FAST_MESSAGES_DIR))
+    os.close(fd)
+    return path
+
+
+def default_session_plan_file(repo: str) -> str:
+    repo_hash = hashlib.sha256(repo.encode("utf-8", "surrogateescape")).hexdigest()[:12]
+    return allocate_temp_json(f"commit-plan-{repo_hash}-")
 
 
 def plan_summary(plan_payload: dict[str, object], plan_file: str | None = None) -> dict[str, object]:
@@ -77,9 +96,11 @@ def command_inventory(args: argparse.Namespace) -> int:
     return 0
 
 
-def command_plan(args: argparse.Namespace) -> int:
-    repo = repo_root(args.repo)
-    plan_file = args.out or default_plan_file(repo)
+def build_snapshot_plan(
+    repo: str,
+    args: argparse.Namespace,
+    plan_file: str,
+) -> dict[str, object]:
     full_payload = ok_payload(
         **build_plan(
             repo,
@@ -91,10 +112,175 @@ def command_plan(args: argparse.Namespace) -> int:
         )
     )
     write_json_file(full_payload, plan_file)
+    return full_payload
+
+
+def validate_fast_messages_file(path: str) -> None:
+    message_path = Path(path)
+    if message_path.parent != FAST_MESSAGES_DIR or not FAST_MESSAGES_FILE_PATTERN.fullmatch(message_path.name):
+        raise SkillError(
+            ErrorCode.INVALID_ARGUMENT,
+            "fast-commit 的 --messages-file 必须位于 /tmp 且包含随机后缀",
+            {"messages_file": path, "expected": "/tmp/commit-messages-<random>.json"},
+        )
+
+
+def write_session_payload(payload: dict[str, object], out_path: str | None = None) -> None:
+    text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    if out_path:
+        Path(out_path).write_text(text + "\n", encoding="utf-8")
+    print(text, flush=True)
+
+
+@contextmanager
+def muted_stdin_echo():
+    if not sys.stdin.isatty():
+        yield
+        return
+    try:
+        import termios
+
+        fd = sys.stdin.fileno()
+        attributes = termios.tcgetattr(fd)
+        muted = attributes.copy()
+        muted[3] &= ~termios.ECHO
+        termios.tcsetattr(fd, termios.TCSADRAIN, muted)
+    except (ImportError, OSError):
+        yield
+        return
+    try:
+        yield
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, attributes)
+
+
+def read_session_messages() -> dict[str, object]:
+    chunks: list[str] = []
+    with muted_stdin_echo():
+        for line in sys.stdin:
+            chunks.append(line)
+            try:
+                payload = json.loads("".join(chunks))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                raise SkillError(ErrorCode.MESSAGE_FILE_INVALID, "session messages JSON 顶层必须为对象")
+            return payload
+    raise SkillError(ErrorCode.MESSAGE_FILE_INVALID, "commit-session 未收到 messages JSON")
+
+
+def command_plan(args: argparse.Namespace) -> int:
+    repo = repo_root(args.repo)
+    plan_file = args.out or default_plan_file(repo)
+    full_payload = build_snapshot_plan(
+        repo,
+        args,
+        plan_file,
+    )
     if getattr(args, "summary_only", False):
         maybe_write_output(plan_summary(full_payload, plan_file), None)
         return 0
     maybe_write_output(full_payload, None)
+    return 0
+
+
+def command_prepare(args: argparse.Namespace) -> int:
+    """Build the immutable plan and the AI-only message template in one pass."""
+    repo = repo_root(args.repo)
+    plan_file = args.out or default_plan_file(repo)
+    full_payload = build_snapshot_plan(
+        repo,
+        args,
+        plan_file,
+    )
+    template = build_message_template(full_payload)
+    maybe_write_output(
+        {
+            "ok": full_payload["ok"],
+            "error_code": full_payload["error_code"],
+            "exit_code": full_payload["exit_code"],
+            "plan_file": plan_file,
+            "summary": plan_summary(full_payload, plan_file),
+            "message_template": template,
+        },
+        None,
+    )
+    return 0
+
+
+def command_fast_commit(args: argparse.Namespace) -> int:
+    """Prepare a fresh snapshot, merge AI messages, and apply it atomically."""
+    repo = repo_root(args.repo)
+    plan_file = args.plan_file or default_plan_file(repo)
+    validate_fast_messages_file(args.messages_file)
+    if Path(plan_file).resolve() == Path(args.messages_file).resolve():
+        raise SkillError(
+            ErrorCode.INVALID_ARGUMENT,
+            "--plan-file 与 --messages-file 不得指向同一路径",
+            {"plan_file": plan_file, "messages_file": args.messages_file},
+        )
+    full_payload = build_snapshot_plan(
+        repo,
+        args,
+        plan_file,
+    )
+    plan = merge_message_file(
+        validate_plan_file(full_payload, require_messages=False),
+        load_message_file(args.messages_file),
+    )
+    sign_context = detect_signing(repo, args.sign_mode if args.sign_mode != "auto" else None)
+    payload = apply_plan(plan, sign_context, sign_mode_override=args.sign_mode)
+    payload["plan_file"] = plan_file
+    maybe_write_output(payload, args.out)
+    return 0
+
+
+def command_commit_session(args: argparse.Namespace) -> int:
+    """Keep one process alive while the AI supplies the message JSON on stdin."""
+    repo = repo_root(args.repo)
+    plan_file = args.plan_file or default_session_plan_file(repo)
+    full_payload = build_snapshot_plan(repo, args, plan_file)
+    validated_plan = validate_plan_file(full_payload, require_messages=False)
+
+    if not full_payload["commits"]:
+        sign_context = detect_signing(repo, args.sign_mode if args.sign_mode != "auto" else None)
+        payload = apply_plan(validated_plan, sign_context, sign_mode_override=args.sign_mode)
+        payload.update({"phase": "complete", "plan_file": plan_file, "noop": True})
+        write_session_payload(payload, args.out)
+        return 0
+
+    messages_file = allocate_temp_json("commit-messages-")
+    prepared = {
+        "phase": "prepared",
+        "ok": True,
+        "error_code": ErrorCode.OK.name,
+        "exit_code": int(ErrorCode.OK),
+        "plan_file": plan_file,
+        "messages_file": messages_file,
+        "summary": plan_summary(full_payload, plan_file),
+        "message_template": build_message_template(full_payload),
+    }
+    write_session_payload(prepared, args.out)
+
+    message_payload = read_session_messages()
+    write_json_file(message_payload, messages_file)
+    plan = merge_message_file(validated_plan, load_message_file(messages_file))
+    sign_context = detect_signing(repo, args.sign_mode if args.sign_mode != "auto" else None)
+    payload = apply_plan(plan, sign_context, sign_mode_override=args.sign_mode)
+    try:
+        Path(messages_file).unlink()
+        messages_file_removed = True
+    except OSError:
+        messages_file_removed = False
+    payload.update(
+        {
+            "phase": "complete",
+            "plan_file": plan_file,
+            "messages_file": messages_file,
+            "messages_file_removed": messages_file_removed,
+        }
+    )
+    write_session_payload(payload, args.out)
     return 0
 
 
@@ -208,6 +394,51 @@ def add_plan_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) ->
     parser.set_defaults(func=command_plan)
 
 
+def add_prepare_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    parser = sub.add_parser(
+        "prepare",
+        help="Build the immutable plan and AI message template in one invocation",
+    )
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--include", action="append", default=[])
+    parser.add_argument("--exclude", action="append", default=[])
+    parser.add_argument("--split-mode", choices=["auto", "single", "split"], default="auto")
+    parser.add_argument("--sign-mode", choices=["auto", "signed", "unsigned"], default="auto")
+    add_common_flags(parser)
+    parser.set_defaults(func=command_prepare)
+
+
+def add_fast_commit_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    parser = sub.add_parser(
+        "fast-commit",
+        help="Prepare a fresh snapshot and apply an AI-generated message in one invocation",
+    )
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--messages-file", required=True)
+    parser.add_argument("--plan-file")
+    parser.add_argument("--include", action="append", default=[])
+    parser.add_argument("--exclude", action="append", default=[])
+    parser.add_argument("--split-mode", choices=["auto", "single", "split"], default="auto")
+    parser.add_argument("--sign-mode", choices=["auto", "signed", "unsigned"], default="auto")
+    add_common_flags(parser)
+    parser.set_defaults(func=command_fast_commit)
+
+
+def add_commit_session_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    parser = sub.add_parser(
+        "commit-session",
+        help="Prepare a snapshot, wait for one AI message JSON, then commit in the same process",
+    )
+    parser.add_argument("--repo", required=True)
+    parser.add_argument("--plan-file")
+    parser.add_argument("--include", action="append", default=[])
+    parser.add_argument("--exclude", action="append", default=[])
+    parser.add_argument("--split-mode", choices=["auto", "single", "split"], default="auto")
+    parser.add_argument("--sign-mode", choices=["auto", "signed", "unsigned"], default="auto")
+    add_common_flags(parser)
+    parser.set_defaults(func=command_commit_session)
+
+
 def add_coverage_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser("coverage", help="Audit coverage by args or plan-file")
     parser.add_argument("--repo")
@@ -258,6 +489,9 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
     add_inventory_parser(sub)
     add_plan_parser(sub)
+    add_prepare_parser(sub)
+    add_fast_commit_parser(sub)
+    add_commit_session_parser(sub)
     add_coverage_parser(sub)
     add_message_template_parser(sub)
     add_apply_plan_parser(sub)
