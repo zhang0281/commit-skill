@@ -16,8 +16,10 @@ from .executor import apply_plan
 from .inventory import build_inventory, changed_file_paths, expand_targets, fingerprint_paths
 from .messages import build_message_template, load_message_file, merge_message_file
 from .planner import build_plan
+from .postflight import build_postflight, capture_dirty_state
+from .preflight import cancel_preflight, finish_preflight, start_preflight
 from .process import repo_root
-from .signing import detect_signing
+from .signing import detect_signing, signed_signing_context, unsigned_signing_context
 
 
 FAST_MESSAGES_FILE_PATTERN = re.compile(r"commit-messages-[A-Za-z0-9_-]{6,}\.json\Z")
@@ -125,6 +127,32 @@ def validate_fast_messages_file(path: str) -> None:
         )
 
 
+def canonical_value(path: str) -> str:
+    return os.path.realpath(os.path.abspath(path))
+
+
+def signing_context_for_apply(repo: str, requested_sign_mode: str) -> dict[str, object]:
+    if requested_sign_mode == "unsigned":
+        return unsigned_signing_context()
+    if requested_sign_mode == "signed":
+        return signed_signing_context()
+    return detect_signing(repo, requested_sign_mode if requested_sign_mode != "auto" else None)
+
+
+def apply_with_session_gates(
+    plan: dict[str, object],
+    sign_context: dict[str, object],
+    sign_mode: str,
+    preflight_run,
+    initial_state: dict[str, dict[str, object]],
+) -> dict[str, object]:
+    preflight = finish_preflight(preflight_run)
+    payload = apply_plan(plan, sign_context, sign_mode_override=sign_mode)
+    payload["preflight"] = preflight
+    payload["postflight"] = build_postflight(plan, initial_state)
+    return payload
+
+
 def write_session_payload(payload: dict[str, object], out_path: str | None = None) -> None:
     text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
     if out_path:
@@ -213,7 +241,8 @@ def command_fast_commit(args: argparse.Namespace) -> int:
     repo = repo_root(args.repo)
     plan_file = args.plan_file or default_plan_file(repo)
     validate_fast_messages_file(args.messages_file)
-    if Path(plan_file).resolve() == Path(args.messages_file).resolve():
+    message_path = args.messages_file
+    if canonical_value(plan_file) == canonical_value(message_path):
         raise SkillError(
             ErrorCode.INVALID_ARGUMENT,
             "--plan-file 与 --messages-file 不得指向同一路径",
@@ -224,12 +253,18 @@ def command_fast_commit(args: argparse.Namespace) -> int:
         args,
         plan_file,
     )
-    plan = merge_message_file(
-        validate_plan_file(full_payload, require_messages=False),
-        load_message_file(args.messages_file),
-    )
-    sign_context = detect_signing(repo, args.sign_mode if args.sign_mode != "auto" else None)
-    payload = apply_plan(plan, sign_context, sign_mode_override=args.sign_mode)
+    initial_state = capture_dirty_state(repo, full_payload["inventory"])
+    preflight_run = start_preflight(full_payload)
+    try:
+        plan = merge_message_file(
+            validate_plan_file(full_payload, require_messages=False),
+            load_message_file(args.messages_file),
+        )
+        sign_context = signing_context_for_apply(repo, args.sign_mode) if plan.get("commits") else {}
+        payload = apply_with_session_gates(plan, sign_context, args.sign_mode, preflight_run, initial_state)
+    except Exception:
+        cancel_preflight(preflight_run)
+        raise
     payload["plan_file"] = plan_file
     maybe_write_output(payload, args.out)
     return 0
@@ -241,14 +276,28 @@ def command_commit_session(args: argparse.Namespace) -> int:
     plan_file = args.plan_file or default_session_plan_file(repo)
     full_payload = build_snapshot_plan(repo, args, plan_file)
     validated_plan = validate_plan_file(full_payload, require_messages=False)
+    initial_state = capture_dirty_state(repo, full_payload["inventory"])
 
     if not full_payload["commits"]:
-        sign_context = detect_signing(repo, args.sign_mode if args.sign_mode != "auto" else None)
-        payload = apply_plan(validated_plan, sign_context, sign_mode_override=args.sign_mode)
+        preflight_run = start_preflight(validated_plan)
+        try:
+            sign_context = {}
+            payload = apply_with_session_gates(
+                validated_plan,
+                sign_context,
+                args.sign_mode,
+                preflight_run,
+                initial_state,
+            )
+        except Exception:
+            cancel_preflight(preflight_run)
+            raise
         payload.update({"phase": "complete", "plan_file": plan_file, "noop": True})
         write_session_payload(payload, args.out)
         return 0
 
+    message_template = build_message_template(full_payload)
+    preflight_run = start_preflight(validated_plan)
     messages_file = allocate_temp_json("commit-messages-")
     prepared = {
         "phase": "prepared",
@@ -258,20 +307,26 @@ def command_commit_session(args: argparse.Namespace) -> int:
         "plan_file": plan_file,
         "messages_file": messages_file,
         "summary": plan_summary(full_payload, plan_file),
-        "message_template": build_message_template(full_payload),
+        "message_template": message_template,
+        "preflight": preflight_run.prepared_summary(),
     }
     write_session_payload(prepared, args.out)
 
-    message_payload = read_session_messages()
-    write_json_file(message_payload, messages_file)
-    plan = merge_message_file(validated_plan, load_message_file(messages_file))
-    sign_context = detect_signing(repo, args.sign_mode if args.sign_mode != "auto" else None)
-    payload = apply_plan(plan, sign_context, sign_mode_override=args.sign_mode)
     try:
-        Path(messages_file).unlink()
-        messages_file_removed = True
-    except OSError:
-        messages_file_removed = False
+        message_payload = read_session_messages()
+        write_json_file(message_payload, messages_file)
+        plan = merge_message_file(validated_plan, load_message_file(messages_file))
+        sign_context = signing_context_for_apply(repo, args.sign_mode)
+        payload = apply_with_session_gates(plan, sign_context, args.sign_mode, preflight_run, initial_state)
+    except Exception:
+        cancel_preflight(preflight_run)
+        raise
+    finally:
+        try:
+            Path(messages_file).unlink()
+            messages_file_removed = True
+        except OSError:
+            messages_file_removed = False
     payload.update(
         {
             "phase": "complete",
@@ -320,8 +375,12 @@ def command_apply_plan(args: argparse.Namespace) -> int:
             "--repo 与计划 JSON 中的 repo 不一致",
             {"repo": repo, "plan_repo": plan["repo"]},
         )
-    sign_context = detect_signing(repo, args.sign_mode if args.sign_mode != "auto" else None)
-    payload = apply_plan(plan, sign_context, sign_mode_override=args.sign_mode)
+    requested_sign_mode = args.sign_mode
+    if requested_sign_mode == "auto":
+        requested_sign_mode = str(plan.get("requested", {}).get("sign_mode", "auto"))
+    sign_context = signing_context_for_apply(repo, requested_sign_mode) if plan.get("commits") else {}
+    apply_sign_mode = None if args.sign_mode == "auto" else args.sign_mode
+    payload = apply_plan(plan, sign_context, sign_mode_override=apply_sign_mode)
     maybe_write_output(payload, args.out)
     return 0
 
@@ -356,7 +415,7 @@ def build_manual_commit_plan(repo: str, args: argparse.Namespace) -> dict[str, o
 def command_commit(args: argparse.Namespace) -> int:
     repo = repo_root(args.repo)
     plan = build_manual_commit_plan(repo, args)
-    sign_context = detect_signing(repo, args.sign_mode if args.sign_mode != "auto" else None)
+    sign_context = signing_context_for_apply(repo, args.sign_mode)
     if args.dry_run:
         payload = ok_payload(repo=repo, dry_run=True, sign_context=sign_context, plan=plan)
         maybe_write_output(payload, args.out)

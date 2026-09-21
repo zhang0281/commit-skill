@@ -31,7 +31,12 @@
         "file_actions": [
           "修改 module.txt"
         ],
-        "summary": "修改 module.txt"
+        "summary": "修改 module.txt",
+        "semantic_diff": {
+          "text": "diff --git a/module.txt b/module.txt\nindex ce01362..3b18e51 100644\n--- a/module.txt\n+++ b/module.txt\n@@ -1 +1 @@\n-hello\n+hello world\n",
+          "truncated": false,
+          "bytes": 133
+        }
       },
       "type_hint": "chore",
       "title_hint": "更新子模块 vendor/child 内部改动",
@@ -57,7 +62,12 @@
         "file_actions": [
           "修改 vendor/child"
         ],
-        "summary": "修改 vendor/child"
+        "summary": "修改 vendor/child",
+        "semantic_diff": {
+          "text": "diff --git a/vendor/child b/vendor/child\n--- a/vendor/child\n+++ b/vendor/child\n@@ -1 +1 @@\n-Subproject commit <SUBMODULE_SHA>\n+Subproject commit <SUBMODULE_SHA>-dirty\n",
+          "truncated": false,
+          "bytes": 217
+        }
       },
       "type_hint": "chore",
       "title_hint": "同步 1 个子模块引用",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -28,6 +29,7 @@ def normalize_payload(payload: object, replacements: dict[str, str]) -> object:
         result = payload
         for raw, placeholder in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
             result = result.replace(raw, placeholder)
+        result = re.sub(r"(?<=Subproject commit )[0-9a-f]{40}", "<SUBMODULE_SHA>", result)
         return result
     return payload
 

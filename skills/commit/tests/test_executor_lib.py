@@ -31,6 +31,10 @@ class ExecutorLibTest(unittest.TestCase):
             self.assertIn("commit.gpgsign=false", attempt["command"])
             mocked.assert_called_once()
         with mock.patch.object(executor, "git", return_value=CmdResult([], 0, "", "")) as mocked:
+            _, attempt = executor.commit_attempt(self.plan, {}, "unsigned")
+            self.assertIn("commit.gpgsign=false", attempt["command"])
+            mocked.assert_called_once()
+        with mock.patch.object(executor, "git", return_value=CmdResult([], 0, "", "")) as mocked:
             _, attempt = executor.commit_attempt(self.plan, {}, "signed")
             self.assertIn("-S", attempt["command"])
             mocked.assert_called_once()
@@ -116,15 +120,26 @@ class ExecutorLibTest(unittest.TestCase):
              mock.patch.object(executor, "resolve_commit_paths", return_value=(["a.py"], [])), \
              mock.patch.object(executor, "resolve_sign_mode", side_effect=lambda mode, ctx: "signed" if mode == "auto" else mode), \
              mock.patch.object(executor, "run_commit", return_value=CommitRun(CmdResult([], 0, "done", ""), [{"command": []}], True, False)), \
-             mock.patch.object(executor, "git", return_value=CmdResult([], 0, "deadbeef\n", "")):
+             mock.patch.object(executor, "git", side_effect=[CmdResult([], 0, "deadbeef\n", ""), CmdResult([], 0, "", "Good signature")]):
             payload = executor.apply_plan(good_plan, {"suggested_sign_mode": "signed"})
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["results"][0]["sha"], "deadbeef")
+            self.assertTrue(payload["results"][0]["signature_verification"]["verified"])
 
         with mock.patch.object(executor, "run_coverage_from_plan", return_value={"passed": True}), \
-             mock.patch.object(executor, "resolve_sign_mode", return_value="unsigned"):
+             mock.patch.object(executor, "resolve_commit_paths", return_value=(["a.py"], [])), \
+             mock.patch.object(executor, "resolve_sign_mode", return_value="signed"), \
+             mock.patch.object(executor, "run_commit", return_value=CommitRun(CmdResult([], 0, "done", ""), [], True, False)), \
+             mock.patch.object(executor, "git", side_effect=[CmdResult([], 0, "deadbeef\n", ""), CmdResult([], 1, "", "bad signature")]):
+            with self.assertRaises(SkillError) as ctx:
+                executor.apply_plan(good_plan, {"suggested_sign_mode": "signed"})
+            self.assertEqual(ctx.exception.code, ErrorCode.SIGNATURE_VERIFY_FAILED)
+
+        with mock.patch.object(executor, "run_coverage_from_plan", return_value={"passed": True}), \
+             mock.patch.object(executor, "resolve_sign_mode", return_value="unsigned") as resolve:
             payload = executor.apply_plan({"repo": "/repo", "requested": {"sign_mode": "unsigned"}, "commits": []}, {"suggested_sign_mode": "unsigned"})
             self.assertTrue(payload["noop"])
+            resolve.assert_not_called()
 
         with mock.patch.object(executor, "run_coverage_from_plan", return_value={"passed": True}), \
              mock.patch.object(executor, "resolve_commit_paths", return_value=(["a.py"], ["later.py"])):

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
 import subprocess
 
 from .errors import ErrorCode, SkillError
@@ -83,6 +85,40 @@ def diff_name_status(repo: str, paths: list[str]) -> list[dict[str, str]]:
         if len(parts) == 2:
             entries.append({"status": parts[0].strip(), "path": parts[1].strip()})
     return entries[:30]
+
+
+def semantic_diff_excerpt(repo: str, paths: list[str], limit: int = 16000) -> dict[str, object]:
+    """Return a bounded patch plus untracked text so AI needs no separate git diff."""
+    if not paths:
+        return {"text": "", "truncated": False, "bytes": 0}
+    if head_exists(repo):
+        result = git(repo, "diff", "--no-ext-diff", "--no-color", "--unified=3", "HEAD", "--", *paths)
+    else:
+        result = git(repo, "diff", "--no-ext-diff", "--no-color", "--unified=3", "--cached", "--", *paths)
+    chunks = [result.stdout] if result.returncode == 0 and result.stdout else []
+
+    untracked = git(repo, "ls-files", "--others", "--exclude-standard", "-z", "--", *paths)
+    if untracked.returncode == 0:
+        for relative in untracked.stdout.split("\0"):
+            if not relative:
+                continue
+            path = Path(repo, relative)
+            try:
+                data = path.read_bytes()[:4096]
+            except OSError:
+                continue
+            if b"\0" in data:
+                chunks.append(f"\n--- untracked binary: {relative} ---\n")
+                continue
+            text = data.decode("utf-8", "replace")
+            chunks.append(f"\n--- untracked file: {relative} ---\n{text}")
+
+    combined = "".join(chunks)
+    encoded = combined.encode("utf-8", "replace")
+    truncated = len(encoded) > limit
+    if truncated:
+        combined = encoded[:limit].decode("utf-8", "ignore") + "\n... [semantic diff truncated]"
+    return {"text": combined, "truncated": truncated, "bytes": len(encoded)}
 
 
 

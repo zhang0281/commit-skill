@@ -212,7 +212,7 @@ def build_plan(
         },
         "notes": [
             "默认固定提交边界：单项目一个根仓提交；多子模块时每个 dirty 子模块一个内部提交，父仓指针合并到一个根仓提交。",
-            "执行前应再次运行 coverage --plan-file，确保无 uncovered 项。",
+            "commit-session / apply-plan 会在执行前内部运行 coverage；独立 coverage 命令仅用于调试。",
             "Codex 与 Claude Code 均调用同一组 Python 脚本；差异只在外层 skill metadata。",
         ],
     }

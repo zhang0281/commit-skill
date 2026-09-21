@@ -35,6 +35,42 @@ def _suggested_sign_mode(
     return "signed" if signing_available else "unsigned"
 
 
+def unsigned_signing_context() -> dict[str, object]:
+    """Return a complete context without probing GPG for an explicit unsigned run."""
+    return {
+        "probe_mode": "skipped-explicit-unsigned",
+        "has_tty": sys.stdin.isatty(),
+        "gpg_tty": os.environ.get("GPG_TTY", ""),
+        "gpg_agent_launch_ok": None,
+        "gpg_agent_launch_stderr": "",
+        "secret_key_ids": [],
+        "repo_commit_gpgsign": "",
+        "global_commit_gpgsign": "",
+        "repo_signingkey": "",
+        "global_signingkey": "",
+        "suggested_sign_mode": "unsigned",
+        "signing_available": False,
+    }
+
+
+def signed_signing_context() -> dict[str, object]:
+    """Force a signed attempt without paying for a separate GPG probe."""
+    return {
+        "probe_mode": "skipped-explicit-signed",
+        "has_tty": sys.stdin.isatty(),
+        "gpg_tty": os.environ.get("GPG_TTY", ""),
+        "gpg_agent_launch_ok": None,
+        "gpg_agent_launch_stderr": "",
+        "secret_key_ids": [],
+        "repo_commit_gpgsign": "",
+        "global_commit_gpgsign": "",
+        "repo_signingkey": "",
+        "global_signingkey": "",
+        "suggested_sign_mode": "signed",
+        "signing_available": None,
+    }
+
+
 def peek_signing(repo: str, requested_sign_mode: str | None = None) -> dict[str, object]:
     repo_gpgsign = git_get(repo, "commit.gpgsign")
     global_gpgsign = git_get(repo, "commit.gpgsign", global_scope=True)

@@ -88,6 +88,27 @@
    - session messages 文件由脚本放在 `/tmp/commit-messages-<random>.json`，随机后缀至少 6 位，成功后清理
    - `fast-commit` 保留为宿主无法保持 stdin 时的非交互兼容入口
 
+15. **内建 transaction gates**
+   - `phase=prepared` 内嵌有界 semantic diff，AI 不再另跑 `git diff`
+   - preflight 用临时 Git index 执行 `git diff --check`，并在等待 AI message 时并行运行 `.commit-skill.json` 配置的 tests
+   - explicit `signed` 直接尝试 `git commit -S`，成功后在 session 内执行 `git verify-commit`；`auto` 保留完整探测与 fallback
+   - `phase=complete` 内嵌最终 inventory、clean-tree 与 fingerprint 复核；后写入路径以 `post_snapshot_changes` 返回
+   - `$commit` 外层只消费 prepared/complete，不再读取 memory/doctrine/loop 或补跑 coverage/inventory/验签
+   - clean tree 的 noop 路径不解析 GPG；只有存在 candidate commit 时才进入 signing context
+
+16. **preflight trust boundary**
+   - `.commit-skill.json` 的 `preflight.commands[].argv` 由目标仓库维护者提供，脚本以 `shell=False`、目标仓库为 cwd 启动；它不是 sandbox，能以当前用户权限执行测试程序
+   - 配置损坏、命令无法启动、超时或非零退出均以 `PREFLIGHT_FAILED` 阻止提交；不把命令字符串拼入 shell，避免额外 shell injection 面
+   - `semantic_diff` 只向 AI 提供当前 snapshot 的有界文本，不改变候选路径、repo boundary 或提交权限
+
+### 2026-09-21 - 内建 preflight、验签与 postflight
+
+**变更内容**: 将 semantic diff、临时 index `git diff --check`、可配置 tests、signed commit 验签、最终 inventory 与 post-snapshot fingerprint 检查纳入 `commit-session`；explicit signed 取消事前 GPG inventory。
+
+**变更理由**: 把原先由 Agent 多次调用的只读分析与最终核验并回唯一脚本进程，同时让 tests 与 AI message 生成并行，缩短端到端提交用时并消除遗漏核验。
+
+**影响范围**: `.commit-skill.json`、`skills/commit/{SKILL.md,agents/openai.yaml,references/signing.md}`、`skills/commit/scripts/lib/{cli,errors,executor,inventory,messages,postflight,preflight,process,signing}.py`、tests 与 golden snapshots、`README.md`、`DESIGN.md`。
+
 ### 2026-09-21 - 默认 one-process commit session
 
 **变更内容**: 新增 `commit-session` 子命令，先输出固定 snapshot 与 message template，再从同一 stdin 接收 AI message，并在同一进程中完成 merge、coverage、签名与真正的 `git add/commit`；保留 `fast-commit` 作为非交互兼容路径。
@@ -102,6 +123,7 @@
 - submodule merge 策略仍偏保守，默认先 internal 再 pointer
 - `sign-mode=auto` 在无 TTY 沙箱下可能探测不到完整 GPG 灵脉，但结构已允许 fallback
 - 若 `$commit` 执行过程中用户又修改了工作区，这些新路径将留待下一次 `$commit`；若同路径内容漂移，本轮会中止并要求重跑 plan
+- 质量扫描仍报告既有 `coverage/inventory/executor/messages` 的复杂度与长函数 warning；这些模块承载 snapshot、submodule、coverage 与提交事务的顺序约束，本轮未做无收益拆分。新增 `preflight` 的分支用于配置校验、超时和子进程清理，保持显式错误边界优先于压缩行数。
 
 ### 2026-06-06 - 收紧为 message-only AI 快路
 

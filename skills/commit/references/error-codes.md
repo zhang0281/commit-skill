@@ -15,8 +15,10 @@ Read this when a script returns `ok=false`, `passed=false`, non-zero exit code, 
 | `GIT_COMMIT_FAILED` | 23 | commit failed | Report attempts; inspect index cleanup |
 | `COVERAGE_GAP` | 30 | uncovered, out-of-snapshot, missing pointer, or fingerprint drift | Fix plan or rerun plan |
 | `PLAN_APPLY_FAILED` | 31 | plan execution failed | Report details; stop |
+| `PREFLIGHT_FAILED` | 32 | temporary-index diff check or configured test failed | Read `preflight`; do not commit |
 | `GPG_REQUIRED_FAILED` | 40 | explicit signed commit failed | Do not fallback; report GPG issue |
 | `GPG_AUTO_FAILED` | 41 | auto signing and fallback both failed | Report attempts |
+| `SIGNATURE_VERIFY_FAILED` | 42 | signed commit created but `git verify-commit` failed | Stop and report SHA/verification output |
 | `SUBMODULE_SCAN_FAILED` | 50 | submodule scan failed | Report submodule stderr |
 
 ## Response guidance

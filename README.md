@@ -7,6 +7,7 @@
 ```text
 commit-skill/
 ├── README.md
+├── .commit-skill.json       # 可选：session 内并行运行的 preflight tests
 ├── .claude-plugin/
 │   └── marketplace.json
 └── skills/
@@ -23,6 +24,8 @@ commit-skill/
         ├── scripts/
         │   ├── commit_skill.py
         │   └── lib/
+        │       ├── preflight.py
+        │       └── postflight.py
         └── tests/
 ```
 
@@ -31,7 +34,7 @@ commit-skill/
 本仓库的 `commit` skill 采用 **AI 仅生成 commit message + 脚本执行** 的混合模式：
 
 - **AI**：只填写固定 candidate commits 的 `type/title/bullets`
-- **脚本**：负责 inventory、candidate 固化、message template、message merge、message coverage audit、coverage audit、统一错误码、submodule 扫描、签名探测与真正的 `git commit`
+- **脚本**：负责 inventory、candidate 固化、semantic diff、message merge、preflight、coverage、submodule、签名、`git commit`、验签与最终 clean-tree/fingerprint 核验
 - **提交责任边界**：外层 AI 启动一次 `commit-session` 后只回写 message JSON；真正的 `prepare`、coverage、`git add/commit` 均由同一脚本进程执行
 - **默认 fast path**：`commit-session` 先固化 snapshot 并输出 template，AI 回写 messages JSON 后，同一进程完成 merge、coverage 与真实提交
 - **固定 commit 数**：
@@ -51,10 +54,12 @@ commit-skill/
 
 1. `commit-session --repo .`：一次启动脚本并固化 snapshot，输出 `phase=prepared` 与 message template
 2. AI 通过同一进程 stdin 回写允许填写的 `id/type/title/bullets`；messages 文件由脚本放入 `/tmp/commit-messages-<random>.json`
-3. 同一进程输出 `phase=complete`，完成 merge、coverage、签名与实际提交
+3. 同一进程输出 `phase=complete`，完成 merge、preflight、coverage、签名、实际提交、验签和最终 inventory
 4. 宿主不支持保持 stdin 时，退回 `fast-commit --messages-file /tmp/commit-messages-<random>.json`
 
-无改动时，`commit-session` 直接输出 `phase=complete` + `noop`，不等待 stdin。
+无改动时，`commit-session` 直接输出 `phase=complete` + `noop`，不等待 stdin，也不做无意义的 GPG signing probe。
+
+默认不需要外围 `git diff`、tests、coverage、inventory 或验签调用：`phase=prepared` 已携带有界 semantic diff，`phase=complete` 已携带 `preflight` 与 `postflight`。仓库可用 `.commit-skill.json` 的 `preflight.commands[].argv` 配置 tests；这些命令在等待 AI message 时并行执行。`git diff --check` 始终使用临时 index 自动执行，不改变真实 staging。
 
 ## message-only 硬限制
 
@@ -93,4 +98,4 @@ python3 -m unittest discover -s skills/commit/tests -p 'test_*.py'
 - `commit-session` 子命令是 `$commit` 默认流程；`fast-commit`、`plan` 与 `prepare` 仍可单独用于调试
 - include/exclude 同时作用于 root 与 submodule path
 - 统一错误码便于 Codex 与 Claude Code 都稳定消费脚本结果
-- `sign-mode=auto` 在 plan 中保留 auto，apply 时若 GPG 可用则优先 signed commit，失败可 fallback
+- `sign-mode=unsigned` 会以 `git -c commit.gpgsign=false commit` 强制覆盖仓库/全局签名配置；`sign-mode=signed` 直接尝试并验签；`auto` 仍保留探测与 fallback

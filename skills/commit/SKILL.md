@@ -17,6 +17,7 @@ description: 拆分并创建规范 Git 提交。Use when Codex or Claude Code ne
   - 多子模块改动：固定为 **每个 dirty 子模块 1 个 internal commit**，再加 **1 个根仓 pointer commit** 统一记录 gitlink
 - **硬限制**：不得让 AI 改 `paths/repo_path/sign_mode/coverage_baseline`，不得让 AI 合并、拆分、增删、重排 commit。
 - **执行约束**：不要手写会改变仓库状态的 Git 命令；只读 diff/status 可用于生成 message；不要启用子代理；不要输出冗长过程说明。
+- **直接执行**：显式 `$commit` 已提供完整上下文与授权；加载本 skill 后立即启动默认快路。不要先搜索 memory，不要读取 doctrine / loop-engineering / 其他 skill，也不要另跑 `git diff`、tests、coverage、inventory 或 `git verify-commit`。仅当脚本返回非零错误码时读取对应 reference。
 
 ## 资源路径解析（防止误找项目目录）
 
@@ -49,9 +50,9 @@ description: 拆分并创建规范 Git 提交。Use when Codex or Claude Code ne
 python3 "$COMMIT_SKILL_SCRIPT" commit-session --repo . --json
 ```
 
-脚本首行输出 `phase=prepared` JSON，内含固定 `plan_file`、位于 `/tmp` 且带随机后缀的 `messages_file`，以及供 AI 阅读的 `message_template`。此时 snapshot 已经固化。
+脚本首行输出 `phase=prepared` JSON，内含固定 `plan_file`、位于 `/tmp` 且带随机后缀的 `messages_file`，以及供 AI 阅读的 `message_template`。`message_template.commits[].diff_summary.semantic_diff` 已携带有界 patch / untracked text；不得再调用独立 `git diff`。此时 snapshot 已经固化，`git diff --check` 已使用临时 index 完成，配置的 tests 已并行启动。
 
-若 `changed_count=0`，脚本直接输出 `phase=complete` 的 `noop` 结果，不等待 stdin。
+若 `changed_count=0`，脚本直接输出 `phase=complete` 的 `noop` 结果，不等待 stdin，也跳过无意义的 GPG signing probe。
 
 ### 2) AI 回写 messages JSON
 
@@ -93,10 +94,33 @@ message 建议：
 - 校验 id 集合、字段白名单、message 合法性
 - 执行 message coverage audit：若关键变更面（路径覆盖、分类覆盖）未被 title/bullets 覆盖，脚本会自动追加结构性兜底 bullets
 - coverage audit
+- preflight：临时 index `git diff --check` + 仓库 `.commit-skill.json` 配置的 tests
 - submodule 顺序校验
 - signing / fallback
 - 最终 coverage / snapshot drift 核验
 - 真正的 `git add/commit`
+- signed commit 的 `git verify-commit`
+- 最终 inventory、clean-tree 与 fingerprint 复核；后写入改动直接返回 `postflight.post_snapshot_changes`
+
+`phase=complete` 已是最终核验结果，AI 不得再独立调用 `inventory`、`git verify-commit`、`git status` 或 coverage。只有 `ok=false` 或 `postflight.clean=false` 时，按返回字段直接报告；不要自行补跑诊断命令。
+
+仓库可用根目录 `.commit-skill.json` 配置 tests；脚本会在等待 AI message 时并行执行，以隐藏大部分测试耗时：
+
+```json
+{
+  "preflight": {
+    "commands": [
+      {
+        "name": "unit-tests",
+        "argv": ["python3", "-B", "-m", "unittest", "discover", "-s", "tests"],
+        "timeout_seconds": 120
+      }
+    ]
+  }
+}
+```
+
+`argv` 必须是字符串数组，不经 shell；未配置时仍执行 `git diff --check`，并在结果中明确 `tests_configured=false`。
 
 若宿主无法保持 stdin 进程，可退回一次性兼容入口：
 

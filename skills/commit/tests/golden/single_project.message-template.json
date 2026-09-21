@@ -40,7 +40,12 @@
           "新增 docs/guide.md",
           "新增 src/app.py"
         ],
-        "summary": "新增 .gitignore; 新增 README.md; 新增 docs/guide.md; 新增 src/app.py"
+        "summary": "新增 .gitignore; 新增 README.md; 新增 docs/guide.md; 新增 src/app.py",
+        "semantic_diff": {
+          "text": "\n--- untracked file: .gitignore ---\n__pycache__/\n\n--- untracked file: README.md ---\n# demo\n\n--- untracked file: docs/guide.md ---\nguide\n\n--- untracked file: src/app.py ---\nprint('ok')\n",
+          "truncated": false,
+          "bytes": 184
+        }
       },
       "type_hint": "chore",
       "title_hint": "整理本次改动",

@@ -7,7 +7,7 @@ from pathlib import Path
 from .inventory import classify_path, top_level_groups
 from .coverage import validate_message_fields, validate_plan_file
 from .errors import ErrorCode, SkillError
-from .process import diff_stat_lines, diff_name_status
+from .process import diff_name_status, diff_stat_lines, semantic_diff_excerpt
 
 MESSAGE_SCHEMA_VERSION = 1
 TEMPLATE_ONLY_KEYS = {
@@ -157,6 +157,7 @@ def build_diff_summary(repo_path: str, paths: list[str]) -> dict[str, object]:
         "stat_lines": stat_lines,
         "file_actions": file_actions[:20],
         "summary": "; ".join(file_actions[:10]) if file_actions else "",
+        "semantic_diff": semantic_diff_excerpt(repo_path, paths),
     }
 
 

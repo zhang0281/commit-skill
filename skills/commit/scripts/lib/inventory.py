@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .errors import ErrorCode, SkillError
 from .process import git, head_exists
-from .signing import detect_signing, peek_signing
+from .signing import detect_signing, peek_signing, signed_signing_context, unsigned_signing_context
 
 TEST_FILE_SUFFIXES = (
     "_test.py",
@@ -400,7 +400,14 @@ def build_inventory(
     status_entries = parse_status(repo)
     changed_files = sorted({entry["path"] for entry in status_entries})
     filtered, explicit_excluded = filtered_paths(changed_files, includes, excludes)
-    sign_context = peek_signing(repo, sign_mode if sign_mode != "auto" else None) if lazy_signing else detect_signing(repo, sign_mode if sign_mode != "auto" else None)
+    if sign_mode == "unsigned":
+        sign_context = unsigned_signing_context()
+    elif sign_mode == "signed":
+        sign_context = signed_signing_context()
+    elif lazy_signing:
+        sign_context = peek_signing(repo, sign_mode if sign_mode != "auto" else None)
+    else:
+        sign_context = detect_signing(repo, sign_mode if sign_mode != "auto" else None)
     all_submodules = collect_submodules(repo, status_entries=status_entries)
     submodules, excluded_submodules = filter_submodules(all_submodules, includes, excludes)
     all_submodule_paths = {entry["path"] for entry in all_submodules}

@@ -121,11 +121,14 @@ class CliLibTest(unittest.TestCase):
             self.assertEqual(ctx.exception.code, ErrorCode.INVALID_ARGUMENT)
 
         with mock.patch.object(cli, "repo_root", return_value="/repo"), \
-             mock.patch.object(cli, "build_snapshot_plan", return_value={"repo": "/repo", "commits": [], "exclude": []}), \
+             mock.patch.object(cli, "build_snapshot_plan", return_value={"repo": "/repo", "commits": [], "exclude": [], "inventory": {}}), \
              mock.patch.object(cli, "validate_plan_file", side_effect=lambda data, require_messages=False: data), \
              mock.patch.object(cli, "load_message_file", return_value={"commits": []}), \
              mock.patch.object(cli, "merge_message_file", return_value={"repo": "/repo", "commits": []}), \
              mock.patch.object(cli, "detect_signing", return_value={"suggested_sign_mode": "unsigned"}), \
+             mock.patch.object(cli, "capture_dirty_state", return_value={}), \
+             mock.patch.object(cli, "start_preflight", return_value=mock.Mock()), \
+             mock.patch.object(cli, "apply_with_session_gates", return_value={"ok": True}), \
              mock.patch.object(cli, "apply_plan", return_value={"ok": True}), \
              mock.patch.object(cli, "maybe_write_output") as write_out:
             self.assertEqual(cli.command_fast_commit(ns_fast), 0)
@@ -187,6 +190,18 @@ class CliLibTest(unittest.TestCase):
              mock.patch.object(cli, "maybe_write_output") as writer:
             self.assertEqual(cli.command_apply_plan(args_ok), 0)
             writer.assert_called_once()
+
+        args_plan_signed = argparse.Namespace(plan_file="/tmp/p.json", messages_file=None, repo="/repo1", sign_mode="auto", out=None, json=True)
+        signed_plan = {"repo": "/repo1", "requested": {"sign_mode": "signed"}, "commits": [{"repo_path": "/repo1", "paths": ["a"], "type": "feat", "title": "x", "bullets": []}], "exclude": []}
+        with mock.patch.object(cli, "load_plan_file", return_value=signed_plan), \
+             mock.patch.object(cli, "validate_plan_file", side_effect=lambda data, require_messages=False: data), \
+             mock.patch.object(cli, "repo_root", return_value="/repo1"), \
+             mock.patch.object(cli, "signed_signing_context", return_value={"suggested_sign_mode": "signed"}) as signed_context, \
+             mock.patch.object(cli, "apply_plan", return_value={"ok": True}) as apply, \
+             mock.patch.object(cli, "maybe_write_output"):
+            self.assertEqual(cli.command_apply_plan(args_plan_signed), 0)
+            signed_context.assert_called_once_with()
+            self.assertIsNone(apply.call_args.kwargs["sign_mode_override"])
 
         args_msg_ok = argparse.Namespace(plan_file="/tmp/p.json", messages_file="/tmp/m.json", repo="/repo1", sign_mode="auto", out=None, json=True)
         with mock.patch.object(cli, "load_plan_file", return_value={"repo": "/repo1", "commits": [{"repo_path": "/repo1", "paths": ["a"], "type": "", "title": "", "bullets": []}], "exclude": []}), \

@@ -56,7 +56,7 @@ def commit_attempt(plan: CommitPlan, env: dict[str, str], mode: str):
     cmd = ["commit", *plan.message_args]
     if mode == "signed":
         cmd.insert(1, "-S")
-    if mode == "fallback":
+    if mode in {"unsigned", "fallback"}:
         cmd = ["-c", "commit.gpgsign=false", *cmd]
     result = git(plan.repo_path, *cmd, env=env)
     attempt = {"command": ["git", "-C", plan.repo_path, *cmd], "returncode": result.returncode, "stderr": result.stderr.strip()}
@@ -118,18 +118,18 @@ def apply_plan(plan: dict[str, object], sign_context: dict[str, object], sign_mo
         raise SkillError(ErrorCode.COVERAGE_GAP, "计划 JSON 未覆盖全部改动", coverage)
 
     requested = sign_mode_override or str(plan.get("requested", {}).get("sign_mode", "auto"))
-    effective_global = resolve_sign_mode(requested, sign_context)
     results: list[dict[str, object]] = []
     message_coverage_audit = list(plan.get("message_coverage_audit", []))
     if not plan.get("commits"):
         return ok_payload(
             repo=plan["repo"],
             sign_mode=requested,
-            effective_sign_mode=effective_global,
+            effective_sign_mode=requested,
             results=[],
             message_coverage_audit=message_coverage_audit,
             noop=True,
         )
+    effective_global = resolve_sign_mode(requested, sign_context)
     for commit_entry in plan["commits"]:
         requested_mode = str(commit_entry.get("sign_mode") or requested)
         effective_mode = resolve_sign_mode(requested_mode, sign_context)
@@ -161,6 +161,23 @@ def apply_plan(plan: dict[str, object], sign_context: dict[str, object], sign_mo
         )
         run = run_commit(commit_plan)
         sha = git(commit_plan.repo_path, "rev-parse", "HEAD").stdout.strip()
+        signature_verification = {"required": run.signed, "verified": None, "returncode": None, "output": ""}
+        if run.signed:
+            verification = git(commit_plan.repo_path, "verify-commit", sha)
+            verification_output = (verification.stdout + verification.stderr).strip()
+            signature_verification.update(
+                {
+                    "verified": verification.returncode == 0,
+                    "returncode": verification.returncode,
+                    "output": verification_output,
+                }
+            )
+            if verification.returncode != 0:
+                raise SkillError(
+                    ErrorCode.SIGNATURE_VERIFY_FAILED,
+                    "提交已创建，但 git verify-commit 未通过",
+                    {"repo_path": commit_plan.repo_path, "sha": sha, "verification": signature_verification},
+                )
         results.append(
             {
                 "id": commit_entry.get("id", ""),
@@ -169,6 +186,7 @@ def apply_plan(plan: dict[str, object], sign_context: dict[str, object], sign_mo
                 "sha": sha,
                 "signed": run.signed,
                 "fallback_used": run.fallback_used,
+                "signature_verification": signature_verification,
                 "attempts": run.attempts,
                 "stdout": run.result.stdout.strip(),
             }

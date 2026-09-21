@@ -14,6 +14,18 @@ from lib import signing
 
 
 class SigningTest(unittest.TestCase):
+    def test_unsigned_context_does_not_claim_signing_available(self) -> None:
+        payload = signing.unsigned_signing_context()
+        self.assertEqual(payload["suggested_sign_mode"], "unsigned")
+        self.assertFalse(payload["signing_available"])
+        self.assertEqual(payload["probe_mode"], "skipped-explicit-unsigned")
+
+    def test_signed_context_skips_probe_but_forces_signed_attempt(self) -> None:
+        payload = signing.signed_signing_context()
+        self.assertEqual(payload["suggested_sign_mode"], "signed")
+        self.assertIsNone(payload["signing_available"])
+        self.assertEqual(payload["probe_mode"], "skipped-explicit-signed")
+
     def test_current_env_without_tty_and_with_tty_error(self) -> None:
         with mock.patch.object(signing.sys.stdin, "isatty", return_value=False):
             env = signing.current_env()

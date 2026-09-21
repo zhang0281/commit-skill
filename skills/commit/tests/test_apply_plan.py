@@ -265,8 +265,99 @@ class ApplyPlanTest(unittest.TestCase):
         self.assertEqual(complete["phase"], "complete")
         self.assertTrue(complete["messages_file_removed"])
         self.assertFalse(messages_file.exists())
+        self.assertTrue(complete["preflight"]["passed"])
+        self.assertFalse(complete["postflight"]["clean"])
+        self.assertEqual(complete["postflight"]["post_snapshot_changes"], [])
         log = subprocess.run(["git", "-C", str(self.repo), "log", "--oneline", "-1"], capture_output=True, text=True, check=True)
         self.assertIn("feat: 初始化测试仓库", log.stdout)
+
+    def test_commit_session_prepared_contains_semantic_diff(self) -> None:
+        process = subprocess.Popen(
+            [
+                "python3",
+                "-B",
+                str(SCRIPT),
+                "commit-session",
+                "--repo",
+                str(self.repo),
+                "--exclude",
+                "plan.json",
+                "--sign-mode",
+                "unsigned",
+                "--json",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        self.addCleanup(lambda: process.stdin and process.stdin.close())
+        self.addCleanup(lambda: process.stdout and process.stdout.close())
+        self.addCleanup(lambda: process.stderr and process.stderr.close())
+        prepared = json.loads(process.stdout.readline())
+        semantic = prepared["message_template"]["commits"][0]["diff_summary"]["semantic_diff"]
+        self.assertIn("README.md", semantic["text"])
+        self.assertIn("src/demo.py", semantic["text"])
+        process.kill()
+        process.wait(timeout=5)
+
+    def test_commit_session_runs_configured_tests_during_message_wait(self) -> None:
+        marker = self.repo / "preflight.marker"
+        (self.repo / ".commit-skill.json").write_text(
+            json.dumps(
+                {
+                    "preflight": {
+                        "commands": [
+                            {
+                                "name": "marker",
+                                "argv": ["python3", "-c", f"from pathlib import Path; Path({str(marker)!r}).write_text('ok')"],
+                            }
+                        ]
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        process = subprocess.Popen(
+            [
+                "python3",
+                "-B",
+                str(SCRIPT),
+                "commit-session",
+                "--repo",
+                str(self.repo),
+                "--exclude",
+                "plan.json",
+                "--exclude",
+                ".commit-skill.json",
+                "--exclude",
+                "preflight.marker",
+                "--sign-mode",
+                "unsigned",
+                "--json",
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        self.addCleanup(lambda: process.poll() is None and process.kill())
+        self.addCleanup(lambda: process.stdin and process.stdin.close())
+        self.addCleanup(lambda: process.stdout and process.stdout.close())
+        self.addCleanup(lambda: process.stderr and process.stderr.close())
+        prepared = json.loads(process.stdout.readline())
+        self.assertEqual(prepared["preflight"]["tests"][0]["status"], "running")
+        for _ in range(100):
+            if marker.exists():
+                break
+            import time
+            time.sleep(0.01)
+        self.assertTrue(marker.exists())
+        process.kill()
+        process.wait(timeout=5)
 
     def test_apply_plan_handles_already_staged_deletions(self) -> None:
         (self.repo / "obsolete.txt").write_text("old\n", encoding="utf-8")
