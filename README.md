@@ -52,10 +52,10 @@ commit-skill/
 
 ## 默认工作流
 
-1. `commit-session --repo .`：一次启动脚本并固化 snapshot，输出 `phase=prepared` 与 message template
+1. `commit-session --repo .`：在可保持 stdin 的持久交互进程中启动脚本并固化 snapshot，输出 `phase=prepared` 与 message template；一次性 exec 若关闭 stdin，不适用于此步骤
 2. AI 通过同一进程 stdin 回写允许填写的 `id/type/title/bullets`；messages 文件由脚本放入 `/tmp/commit-messages-<random>.json`
 3. 同一进程输出 `phase=complete`，完成 merge、preflight、coverage、签名、实际提交、验签和最终 inventory
-4. 宿主不支持保持 stdin 时，退回 `fast-commit --messages-file /tmp/commit-messages-<random>.json`
+4. 宿主不支持保持 stdin，或首轮返回 `commit-session 未收到 messages JSON` 时，依据 template 写入新的 `/tmp/commit-messages-<random>.json`，退回 `fast-commit --messages-file ...`；等待其 `phase=complete`
 
 无改动时，`commit-session` 直接输出 `phase=complete` + `noop`，不等待 stdin，也不做无意义的 GPG signing probe。
 

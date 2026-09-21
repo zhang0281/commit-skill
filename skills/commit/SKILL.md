@@ -44,7 +44,7 @@ description: 拆分并创建规范 Git 提交。Use when Codex or Claude Code ne
 
 ### 1) 启动 commit-session 并固化 snapshot
 
-一次调用脚本：
+此命令必须运行在能保持 stdin/stdout 的交互进程中（例如持久 terminal 或带 `stdin=PIPE` 的 `Popen`）。不要用会在首个工具调用结束时关闭 stdin 的一次性 `exec` 启动：
 
 ```bash
 python3 "$COMMIT_SKILL_SCRIPT" commit-session --repo . --json
@@ -76,6 +76,8 @@ AI 读取 `phase=prepared` 后，只向同一进程 stdin 写入一个 messages 
 ```
 
 `id` 必须遵循 planner 的确定性规则：根仓文件或根仓文件 + pointer 为 `repo:single`；子模块内部提交为 `submodule-internal:<path>`；仅根仓 pointer 为 `repo:submodule-pointers`。AI 不得自行增删、合并、拆分或重排 candidate。
+
+若命令在输出 `phase=prepared` 后立即返回 `MESSAGE_FILE_INVALID` / `commit-session 未收到 messages JSON`，这是宿主关闭 stdin 的 transport failure，不是提交完成。不要再次盲目启动 `commit-session`；应依据刚才的 `message_template` 写入一个新的、符合 `/tmp/commit-messages-<random>.json` 命名规则的 messages 文件，再执行下方的 `fast-commit` 兼容入口。失败的 session 会清理其临时 messages 文件。
 
 message 建议：
 
@@ -130,6 +132,8 @@ python3 "$COMMIT_SKILL_SCRIPT" fast-commit \
   --messages-file /tmp/commit-messages-<random>.json \
   --json
 ```
+
+该兼容入口会重新固化一次 snapshot；写入 messages 文件后，必须等待其输出 `phase=complete`，并以其中的 `ok`、commit 与 `postflight` 字段作为最终结果。
 
 ## 手动调试子命令
 
