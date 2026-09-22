@@ -32,6 +32,11 @@ class CliLibTest(unittest.TestCase):
         parser = cli.build_parser()
         args = parser.parse_args(["inventory", "--repo", "/tmp/x"])
         self.assertEqual(args.command, "inventory")
+        args_doctor = parser.parse_args(["doctor", "--json"])
+        self.assertEqual(args_doctor.command, "doctor")
+        self.assertFalse(args_doctor.probe)
+        args_doctor_probe = parser.parse_args(["doctor", "--probe", "--json"])
+        self.assertTrue(args_doctor_probe.probe)
         args2 = parser.parse_args(["commit", "--repo", "/tmp/x", "--file", "a.py", "--type", "feat", "--title", "x"])
         self.assertEqual(args2.command, "commit")
         args3 = parser.parse_args(["plan", "--repo", "/tmp/x", "--summary-only"])
@@ -42,6 +47,9 @@ class CliLibTest(unittest.TestCase):
         self.assertEqual(args_fast.command, "fast-commit")
         args_session = parser.parse_args(["commit-session", "--repo", "/tmp/x"])
         self.assertEqual(args_session.command, "commit-session")
+        self.assertFalse(args_session.require_custom_model)
+        args_session_custom = parser.parse_args(["commit-session", "--repo", "/tmp/x", "--require-custom-model"])
+        self.assertTrue(args_session_custom.require_custom_model)
         args4 = parser.parse_args(["message-template", "--plan-file", "/tmp/p.json"])
         self.assertEqual(args4.command, "message-template")
 
@@ -78,6 +86,60 @@ class CliLibTest(unittest.TestCase):
              mock.patch.object(cli, "maybe_write_output") as writer:
             self.assertEqual(cli.command_inventory(ns), 0)
             writer.assert_called()
+
+        with mock.patch.object(cli, "doctor_report", return_value={"mode": "existing", "active": False}), \
+             mock.patch.object(cli, "maybe_write_output") as writer:
+            self.assertEqual(cli.command_doctor(argparse.Namespace(out=None, json=True)), 0)
+            writer.assert_called_once()
+
+        with mock.patch.object(cli, "doctor_report", return_value={"mode": "existing", "active": False}) as doctor, \
+             mock.patch.object(cli, "probe_model") as probe, \
+             mock.patch.object(cli, "maybe_write_output") as writer:
+            self.assertEqual(cli.command_doctor(argparse.Namespace(out=None, json=True, probe=True)), 0)
+            probe.assert_not_called()
+            self.assertEqual(writer.call_args.args[0]["config"]["probe"]["status"], "skipped")
+            doctor.assert_called_once()
+
+        custom_report = {"mode": "custom-api", "active": True}
+        model_config = mock.sentinel.model_config
+        with mock.patch.object(cli, "doctor_report", return_value=custom_report), \
+             mock.patch.object(cli, "require_usable_model_config", return_value=model_config), \
+             mock.patch.object(cli, "probe_model", return_value={"status": "passed", "response": "ok"}) as probe, \
+             mock.patch.object(cli, "maybe_write_output") as writer:
+            self.assertEqual(cli.command_doctor(argparse.Namespace(out=None, json=True, probe=True)), 0)
+            probe.assert_called_once_with(model_config)
+            self.assertEqual(writer.call_args.args[0]["config"]["probe"]["status"], "passed")
+
+        probe_error = SkillError(ErrorCode.MODEL_REQUEST_FAILED, "严格响应失败", {"response": "OK"})
+        with mock.patch.object(cli, "doctor_report", return_value={"mode": "custom-api", "active": True}), \
+             mock.patch.object(cli, "require_usable_model_config", return_value=model_config), \
+             mock.patch.object(cli, "probe_model", side_effect=probe_error):
+            with self.assertRaises(SkillError) as context:
+                cli.command_doctor(argparse.Namespace(out=None, json=True, probe=True))
+        self.assertEqual(context.exception.code, ErrorCode.MODEL_REQUEST_FAILED)
+        self.assertEqual(context.exception.details["probe"]["status"], "failed")
+
+        with mock.patch.object(cli, "doctor_report", return_value={"mode": "custom-api", "active": False}):
+            with self.assertRaises(SkillError) as context:
+                cli.command_doctor(argparse.Namespace(out=None, json=True))
+            self.assertEqual(context.exception.code, ErrorCode.MODEL_CONFIG_INVALID)
+
+        with mock.patch.object(cli, "require_usable_model_config", return_value=None):
+            with self.assertRaises(SkillError) as context:
+                cli.command_commit_session(
+                    argparse.Namespace(
+                        require_custom_model=True,
+                        repo="/repo",
+                        plan_file=None,
+                        include=[],
+                        exclude=[],
+                        split_mode="auto",
+                        sign_mode="auto",
+                        out=None,
+                        json=True,
+                    )
+                )
+        self.assertEqual(context.exception.code, ErrorCode.MODEL_CONFIG_INVALID)
 
         with mock.patch.object(cli, "repo_root", return_value="/repo"), \
              mock.patch.object(cli, "build_plan", return_value={"commits": [], "inventory": {"changed_files": [], "root_changed_files": [], "submodules": [], "top_level_groups": {}}, "repo": "/repo", "branch": "main", "requested": {"split_mode": "auto", "sign_mode": "auto"}, "sign_context": {}, "ok": True, "error_code": "OK", "exit_code": 0}), \

@@ -44,6 +44,49 @@ commit-skill/
 - **单次快照原则**：`coverage_baseline` 固定本轮 `$commit` 起手时的路径与 fingerprint；后续新路径或同路径内容漂移不会被顺带提交。
 - **渐进披露**：`SKILL.md` 只保留主流程，schema / signing / submodule / error codes / safety 细则拆入 `skills/commit/references/`。
 
+## `$commit` 入口分流
+
+`$commit` 的一级子命令由首 token 区分，不会吞掉原有自然语言：
+
+- `$commit doctor`：只读查看当前 custom model 配置，不启动提交流程。
+- `$commit doctor --probe`：发送不含仓库内容的短请求，要求模型严格回复 `ok`。
+- `$commit doctor 请实际验证模型`：自然语言仅用于选择 doctor 行为，等价于 `doctor --probe`。
+- `$commit 只提交 src/api.py`：首 token 不是保留子命令，继续走原有自然语言提交路由。
+- 要提交名为 `doctor` 的路径，请写 `$commit 提交 doctor`，避免与诊断子命令混淆。
+
+这属于 skill-level 路由，并非 zsh shell 的 Tab completion；后者需要另行提供 shell completion 函数。当前只把 `doctor` 暴露为 `$commit` 一级子命令，其余脚本命令仍按“脚本子命令”章节直接调用。
+
+## 可选模型配置
+
+`commit-session` 默认沿用宿主 AI 的 stdin message 流程。需要让 skill 自行调用 OpenAI-compatible Chat Completions 时，在 `zshrc` 中导出：
+
+```zsh
+export commit_url='http://127.0.0.1:23000/v1'
+export commit_key='your-api-key'
+export commit_model='your-model'
+```
+
+可选 `commit_timeout`（默认 90 秒，最大 600 秒）；同时支持对应的大写 `COMMIT_*` 别名。三项 `url/key/model` 齐全才启用 custom backend；全部未设置则完全保持现有逻辑，部分设置或非法值会以 `MODEL_CONFIG_INVALID` fail closed。环境变量必须 `export`，否则 Python 子进程不可见。
+
+诊断（API key 只显示脱敏 preview）：
+
+```bash
+python3 "$COMMIT_SKILL_SCRIPT" doctor --json
+python3 "$COMMIT_SKILL_SCRIPT" doctor --probe --json
+```
+
+普通 `doctor` 只做本地配置检查，不发送网络请求。`mode=existing` 表示使用宿主 stdin；`mode=custom-api` 且 `active=true` 表示静态配置有效。显式 `doctor --probe` 会发送一个不含仓库内容的极短 Chat Completions 请求，并要求模型严格回复小写 `ok`；成功时返回 `probe.status=passed`，未配置 custom backend 时为 `skipped`，请求或响应不符则返回 `MODEL_REQUEST_FAILED`。
+
+该配置不改变已启动的 Codex/Claude 外层模型；真正执行 `commit-session` 时会向自定义 endpoint 发送仓库 message template/diff 摘要，需由操作者确认数据边界。请求、响应或 message schema 失败会重试 2 次（共最多 3 次）；仍失败时输出 `phase=fallback` 并交回宿主 AI，未配置变量则直接交给宿主 AI。
+
+`commit-session` 在 custom backend 成功时，message 生成由配置 endpoint 完成；inventory、coverage、signing、commit 与 postflight 均为本地确定性脚本，不再另调模型。若 custom model 三次失败，默认会通过 `phase=fallback` 回到宿主 AI；若要把环境变量未继承或模型失败也视为硬失败，可使用 `--require-custom-model`：
+
+```bash
+zsh -lic 'python3 "$HOME/.codex/skills/commit/scripts/commit_skill.py" commit-session --repo . --require-custom-model --json'
+```
+
+修改 `zshrc` 后，已启动的 Codex/Claude 进程不会刷新环境；请重启宿主，或在新的 login shell 中执行命令。未配置变量时 `commit-session` 会直接使用 `message_source=stdin`；配置模型连续失败时，脚本会先发出 `phase=fallback`，再由宿主 AI 回写 message。
+
 ## 兼容性
 
 - **Codex**：通过 `skills/commit/agents/openai.yaml` 暴露 metadata
@@ -79,6 +122,7 @@ commit-skill/
 - `prepare`：一次生成固定计划与 AI message template（模板调试路径）
 - `fast-commit`：消费 AI messages JSON，一次完成 prepare 与最终提交
 - `commit-session`：单进程输出 template、接收 AI message 并完成最终提交（默认 fast path）
+- `doctor`：查看 custom model 环境变量的生效状态（脱敏）；`--probe` 做严格 `ok` 实际探测
 - `message-template`：生成 AI 专用的最小 message JSON 模板
 - `coverage`：按参数或 plan JSON 执行覆盖校验
 - `apply-plan`：执行最终计划

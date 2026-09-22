@@ -15,6 +15,8 @@ from .errors import ErrorCode, SkillError, error_payload, ok_payload
 from .executor import apply_plan
 from .inventory import build_inventory, changed_file_paths, expand_targets, fingerprint_paths
 from .messages import build_message_template, load_message_file, merge_message_file
+from .model_backend import generate_messages, probe_model
+from .model_config import doctor_report, require_usable_model_config
 from .planner import build_plan
 from .postflight import build_postflight, capture_dirty_state
 from .preflight import cancel_preflight, finish_preflight, start_preflight
@@ -24,6 +26,7 @@ from .signing import detect_signing, signed_signing_context, unsigned_signing_co
 
 FAST_MESSAGES_FILE_PATTERN = re.compile(r"commit-messages-[A-Za-z0-9_-]{6,}\.json\Z")
 FAST_MESSAGES_DIR = Path("/tmp")
+MODEL_RETRY_COUNT = 2
 
 
 def maybe_write_output(payload: dict[str, object], out_path: str | None) -> None:
@@ -98,6 +101,31 @@ def command_inventory(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_doctor(args: argparse.Namespace) -> int:
+    report = doctor_report()
+    if report["mode"] == "custom-api" and not report["active"]:
+        raise SkillError(
+            ErrorCode.MODEL_CONFIG_INVALID,
+            "自定义模型环境变量不完整或无效",
+            {"config": report},
+        )
+    if getattr(args, "probe", False):
+        if report["mode"] == "existing":
+            report["probe"] = {"status": "skipped", "reason": "未配置 custom-api"}
+        else:
+            config = require_usable_model_config()
+            assert config is not None
+            try:
+                report["probe"] = probe_model(config)
+            except SkillError as exc:
+                probe_details = {"status": "failed", "error_code": exc.name, "message": exc.message}
+                if exc.details:
+                    probe_details.update({key: value for key, value in exc.details.items() if key != "config"})
+                raise SkillError(exc.code, "模型探测失败", {"config": report, "probe": probe_details}) from exc
+    maybe_write_output(ok_payload(config=report), args.out)
+    return 0
+
+
 def build_snapshot_plan(
     repo: str,
     args: argparse.Namespace,
@@ -151,6 +179,74 @@ def apply_with_session_gates(
     payload["preflight"] = preflight
     payload["postflight"] = build_postflight(plan, initial_state)
     return payload
+
+
+def merge_session_messages(
+    plan: dict[str, object],
+    message_payload: dict[str, object],
+    custom_model: bool,
+) -> dict[str, object]:
+    try:
+        return merge_message_file(plan, message_payload)
+    except SkillError as exc:
+        if custom_model and exc.code in {ErrorCode.PLAN_FILE_INVALID, ErrorCode.MESSAGE_FILE_INVALID}:
+            raise SkillError(
+                ErrorCode.MODEL_REQUEST_FAILED,
+                "自定义模型返回的 message JSON 未通过 schema 校验",
+                {"reason": exc.message},
+            ) from exc
+        raise
+
+
+def generate_custom_plan_with_retry(
+    plan: dict[str, object],
+    config,
+    message_template: dict[str, object],
+    retry_count: int = MODEL_RETRY_COUNT,
+) -> tuple[dict[str, object] | None, dict[str, object] | None, list[SkillError]]:
+    """Try custom message generation, including schema merge, before host fallback."""
+    failures: list[SkillError] = []
+    for _ in range(retry_count + 1):
+        try:
+            message_payload = generate_messages(config, message_template)
+            merged_plan = merge_session_messages(plan, message_payload, custom_model=True)
+            return merged_plan, message_payload, failures
+        except SkillError as exc:
+            if exc.code != ErrorCode.MODEL_REQUEST_FAILED:
+                raise
+            failures.append(exc)
+    return None, None, failures
+
+
+def model_fallback_payload(failures: list[SkillError]) -> dict[str, object]:
+    last_failure = failures[-1]
+    return {
+        "phase": "fallback",
+        "ok": True,
+        "error_code": ErrorCode.OK.name,
+        "exit_code": int(ErrorCode.OK),
+        "message_source": "stdin",
+        "fallback_from": "custom-model",
+        "fallback_to": "stdin",
+        "model_attempts": len(failures),
+        "retry_count": max(0, len(failures) - 1),
+        "model_error_code": last_failure.name,
+        "message": "自定义模型连续失败，现交回宿主 AI 生成 message JSON",
+    }
+
+
+def model_failure_after_retries(failures: list[SkillError]) -> SkillError:
+    last_failure = failures[-1]
+    return SkillError(
+        ErrorCode.MODEL_REQUEST_FAILED,
+        "自定义模型连续失败，已达到重试上限；require-custom-model 禁止回退",
+        {
+            "attempts": len(failures),
+            "retry_count": max(0, len(failures) - 1),
+            "fallback": "disabled",
+            "last_error_code": last_failure.name,
+        },
+    )
 
 
 def write_session_payload(payload: dict[str, object], out_path: str | None = None) -> None:
@@ -272,6 +368,13 @@ def command_fast_commit(args: argparse.Namespace) -> int:
 
 def command_commit_session(args: argparse.Namespace) -> int:
     """Keep one process alive while the AI supplies the message JSON on stdin."""
+    model_config = require_usable_model_config()
+    if getattr(args, "require_custom_model", False) and model_config is None:
+        raise SkillError(
+            ErrorCode.MODEL_CONFIG_INVALID,
+            "已要求 custom model，但当前进程未继承完整的 commit_* 环境变量",
+            {"hint": "请在导出环境变量的全新 login shell 中重试，或重启 Codex/Claude"},
+        )
     repo = repo_root(args.repo)
     plan_file = args.plan_file or default_session_plan_file(repo)
     full_payload = build_snapshot_plan(repo, args, plan_file)
@@ -299,6 +402,8 @@ def command_commit_session(args: argparse.Namespace) -> int:
     message_template = build_message_template(full_payload)
     preflight_run = start_preflight(validated_plan)
     messages_file = allocate_temp_json("commit-messages-")
+    message_source = "custom-model" if model_config else "stdin"
+    message_fallback: dict[str, object] | None = None
     prepared = {
         "phase": "prepared",
         "ok": True,
@@ -309,13 +414,31 @@ def command_commit_session(args: argparse.Namespace) -> int:
         "summary": plan_summary(full_payload, plan_file),
         "message_template": message_template,
         "preflight": preflight_run.prepared_summary(),
+        "message_source": message_source,
     }
+    if model_config:
+        prepared["model_config"] = model_config.public_summary()
     write_session_payload(prepared, args.out)
 
     try:
-        message_payload = read_session_messages()
+        if model_config:
+            plan, message_payload, failures = generate_custom_plan_with_retry(
+                validated_plan,
+                model_config,
+                message_template,
+            )
+            if plan is None or message_payload is None:
+                if getattr(args, "require_custom_model", False):
+                    raise model_failure_after_retries(failures)
+                message_fallback = model_fallback_payload(failures)
+                write_session_payload(message_fallback, args.out)
+                message_source = "stdin"
+                message_payload = read_session_messages()
+                plan = merge_session_messages(validated_plan, message_payload, custom_model=False)
+        else:
+            message_payload = read_session_messages()
+            plan = merge_session_messages(validated_plan, message_payload, custom_model=False)
         write_json_file(message_payload, messages_file)
-        plan = merge_message_file(validated_plan, load_message_file(messages_file))
         sign_context = signing_context_for_apply(repo, args.sign_mode)
         payload = apply_with_session_gates(plan, sign_context, args.sign_mode, preflight_run, initial_state)
     except Exception:
@@ -333,8 +456,11 @@ def command_commit_session(args: argparse.Namespace) -> int:
             "plan_file": plan_file,
             "messages_file": messages_file,
             "messages_file_removed": messages_file_removed,
+            "message_source": message_source,
         }
     )
+    if message_fallback:
+        payload["message_fallback"] = message_fallback
     write_session_payload(payload, args.out)
     return 0
 
@@ -441,6 +567,13 @@ def add_inventory_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser
     parser.set_defaults(func=command_inventory)
 
 
+def add_doctor_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    parser = sub.add_parser("doctor", help="Show effective custom model configuration without exposing the API key")
+    parser.add_argument("--probe", action="store_true", help="Send a minimal prompt and require the exact response ok")
+    add_common_flags(parser)
+    parser.set_defaults(func=command_doctor)
+
+
 def add_plan_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     parser = sub.add_parser("plan", help="Build editable commit plan JSON")
     parser.add_argument("--repo", required=True)
@@ -494,6 +627,11 @@ def add_commit_session_parser(sub: argparse._SubParsersAction[argparse.ArgumentP
     parser.add_argument("--exclude", action="append", default=[])
     parser.add_argument("--split-mode", choices=["auto", "single", "split"], default="auto")
     parser.add_argument("--sign-mode", choices=["auto", "signed", "unsigned"], default="auto")
+    parser.add_argument(
+        "--require-custom-model",
+        action="store_true",
+        help="Require the configured OpenAI-compatible backend; never wait for host-AI stdin",
+    )
     add_common_flags(parser)
     parser.set_defaults(func=command_commit_session)
 
@@ -547,6 +685,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Hybrid helper for the commit skill")
     sub = parser.add_subparsers(dest="command", required=True)
     add_inventory_parser(sub)
+    add_doctor_parser(sub)
     add_plan_parser(sub)
     add_prepare_parser(sub)
     add_fast_commit_parser(sub)

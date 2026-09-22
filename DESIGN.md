@@ -101,6 +101,48 @@
    - 配置损坏、命令无法启动、超时或非零退出均以 `PREFLIGHT_FAILED` 阻止提交；不把命令字符串拼入 shell，避免额外 shell injection 面
    - `semantic_diff` 只向 AI 提供当前 snapshot 的有界文本，不改变候选路径、repo boundary 或提交权限
 
+17. **可选 custom model backend**
+   - `commit_url` / `commit_key` / `commit_model`（及大写别名）全部存在时，`commit-session` 可调用 OpenAI-compatible `/chat/completions` 生成 message JSON；未配置时保持宿主 stdin 逻辑
+   - 外部模型只返回 `type/title/bullets`，结果仍经既有 message schema、coverage、snapshot、signing 与 postflight；配置不完整 fail closed，请求/响应/schema 失败重试 2 次后默认回到宿主 stdin，`--require-custom-model` 才保持 fail closed
+   - 普通 `doctor` 只输出 endpoint/model/source 与脱敏 key preview，不联网；显式 `doctor --probe` 才发送不含仓库数据的最小请求，并严格校验回复为小写 `ok`
+   - 该 backend 是 commit skill 的可选数据外发路径，不修改已启动 Codex/Claude 外层模型选择，文档明确提醒 endpoint 数据边界
+
+18. **`$commit` 入口分流**
+   - 只将首个非空 token 严格为 `doctor` 的输入路由至只读诊断；其余 suffix 保持原有自然语言提交语义
+   - `doctor` 后的自然语言只能选择已定义的静态诊断或 `--probe` 行为，不作为 commit scope 或任意脚本参数透传
+   - 该机制属于 skill-level routing，不声称提供 zsh `compdef`/Tab completion；底层调试子命令继续使用绝对脚本路径
+
+19. **custom model 的宿主边界**
+   - custom backend 成功时，message 生成由配置 endpoint 完成；inventory、coverage、signing、commit 与 postflight 保持本地确定性，不引入额外模型调用；连续失败后通过显式 `phase=fallback` 回到宿主 stdin
+   - `--require-custom-model` 将环境未继承从兼容性回退改为 `MODEL_CONFIG_INVALID`，并将模型连续失败后的宿主回退改为 `MODEL_REQUEST_FAILED`，保证不会等待 host-AI stdin
+   - 环境变量属于进程级状态；修改 `zshrc` 不会更新已运行的 Codex/Claude，文档要求重启宿主或使用新的 login shell
+
+### 2026-09-22 - custom model 全链路边界
+
+**变更内容**: 明确 custom backend 覆盖唯一的 AI 任务 message generation；请求失败最多重试两次，仍失败时显式回退 host-AI stdin；`--require-custom-model` 在进程未继承配置或模型连续失败时 fail closed。
+
+**变更理由**: 兼顾自定义模型的短暂网络/服务波动与原有 Codex 提交流程；同时保留强制 custom model 场景的确定性失败边界。
+
+**边界**: `$commit` 本身仍由 Codex/Claude 负责 skill dispatch；要完全绕过宿主 AI，应在新的 login shell 直接运行 `commit-session --require-custom-model`。
+
+### 2026-09-22 - `$commit` 子命令入口分流
+
+**变更内容**: 将首 token 严格为 `doctor` 的 `$commit doctor` 请求分流到只读诊断，并保留其他 `$commit <自然语言>` 的原有提交语义；支持 `doctor` 后追加自然语言选择静态检查或 `--probe`。
+
+**变更理由**: 避免 `doctor` 被默认 commit-session 当成提交范围，同时不牺牲 `$commit 只提交 ...` 等自然语言入口。
+
+**边界**: 这是 skill-level 路由，不是 zsh shell completion；其他脚本调试子命令不提升为 `$commit` 一级入口。
+
+### 2026-09-22 - 可选 custom model backend 与 doctor
+
+**变更内容**: 新增 `commit_*` / `COMMIT_*` 环境变量解析、脱敏 `doctor` 子命令与 OpenAI-compatible message backend；`doctor --probe` 可用极短上下文实际验证 endpoint/auth/model；`commit-session` 在三项配置齐全时自动生成并校验 message JSON。
+
+**变更理由**: 允许操作者通过 `zshrc` 为 commit message 选择独立模型，同时在未配置时保留原有宿主 stdin 流程，避免误改变现有行为。
+
+**安全边界**: key 永不打印；URL userinfo/query/fragment 不进入诊断；普通 `doctor` 不联网，probe 不发送仓库内容；配置不完整直接阻断，模型请求失败按两次重试后回退宿主的策略处理，`--require-custom-model` 下仍直接阻断；正式生成 message 前由操作者确认自定义 endpoint 可接收仓库 diff 摘要。
+
+**影响范围**: `skills/commit/scripts/lib/{cli,errors,model_config,model_backend}.py`、`skills/commit/tests/test_{cli_lib,apply_plan,model_config,model_backend}.py`、`skills/commit/{SKILL.md,agents/openai.yaml,references/error-codes.md}`、根 `README.md` 与 `DESIGN.md`。
+
 ### 2026-09-21 - 内建 preflight、验签与 postflight
 
 **变更内容**: 将 semantic diff、临时 index `git diff --check`、可配置 tests、signed commit 验签、最终 inventory 与 post-snapshot fingerprint 检查纳入 `commit-session`；explicit signed 取消事前 GPG inventory。
