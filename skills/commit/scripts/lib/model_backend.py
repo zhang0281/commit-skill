@@ -19,6 +19,9 @@ and bullets semantically; do not add paths or other fields."""
 
 PROBE_SYSTEM_PROMPT = "Reply with exactly the lowercase token ok and nothing else."
 PROBE_USER_PROMPT = "Reply only: ok"
+# Reasoning models may spend a few output tokens before emitting visible content.
+# Three tokens is insufficient for a valid Chat Completions probe on such models.
+PROBE_MAX_TOKENS = 64
 
 
 def _redact(value: str, secret: str) -> str:
@@ -145,7 +148,7 @@ def probe_model(config: ModelConfig) -> dict[str, object]:
             {"role": "user", "content": PROBE_USER_PROMPT},
         ],
         "temperature": 0,
-        "max_tokens": 3,
+        "max_tokens": PROBE_MAX_TOKENS,
     }
     request = Request(
         config.endpoint,

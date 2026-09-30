@@ -98,7 +98,7 @@ class ModelBackendTest(unittest.TestCase):
             result = probe_model(self.config)
         self.assertEqual(result, {"status": "passed", "response": "ok"})
         body = json.loads(opener.call_args.args[0].data.decode("utf-8"))
-        self.assertEqual(body["max_tokens"], 3)
+        self.assertEqual(body["max_tokens"], 64)
         self.assertEqual([message["role"] for message in body["messages"]], ["system", "user"])
         self.assertNotIn("data", json.dumps(body))
 

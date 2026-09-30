@@ -681,7 +681,7 @@ class ApplyPlanTest(unittest.TestCase):
         self.assertEqual(received["authorization"], "Bearer probe-secret-key")
         body = received["body"]
         self.assertEqual(body["model"], "probe-model")
-        self.assertEqual(body["max_tokens"], 3)
+        self.assertEqual(body["max_tokens"], 64)
         self.assertNotIn(str(self.repo), json.dumps(body))
         self.assertNotIn("probe-secret-key", result.stdout)
 
