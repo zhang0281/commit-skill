@@ -10,6 +10,7 @@ import tempfile
 
 from .coverage import resolve_commit_paths
 from .errors import ErrorCode, SkillError
+from .executor import stage_paths
 
 
 CONFIG_NAME = ".commit-skill.json"
@@ -118,15 +119,7 @@ def _diff_check(repo: str, paths: list[str]) -> dict[str, object]:
             Path(temp_index).unlink(missing_ok=True)
         env = os.environ.copy()
         env["GIT_INDEX_FILE"] = temp_index
-        add = subprocess.run(
-            ["git", "-C", repo, "add", "-A", "--", *paths],
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        if add.returncode != 0:
-            raise SkillError(ErrorCode.PREFLIGHT_FAILED, add.stderr.strip() or "临时 index staging 失败")
+        stage_paths(repo, paths, env, ErrorCode.PREFLIGHT_FAILED)
         head = subprocess.run(["git", "-C", repo, "rev-parse", "--verify", "HEAD"], capture_output=True, check=False)
         args = ["git", "-C", repo, "diff", "--cached", "--check"]
         if head.returncode == 0:

@@ -685,6 +685,55 @@ class ApplyPlanTest(unittest.TestCase):
         self.assertNotIn(str(self.repo), json.dumps(body))
         self.assertNotIn("probe-secret-key", result.stdout)
 
+    def check_session_staged_deletion(self, regenerate: bool, ignored: bool) -> None:
+        cache_path = "src/__pycache__/generate-glyphs.cpython-310.pyc"
+        cache = self.repo / cache_path
+        cache.parent.mkdir()
+        cache.write_bytes(b"old cache")
+        subprocess.run(["git", "-C", str(self.repo), "add", "README.md", "src/demo.py", cache_path], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-m", "init"], check=True, capture_output=True)
+        cache.unlink()
+        subprocess.run(["git", "-C", str(self.repo), "add", "--", cache_path], check=True)
+        if ignored:
+            (self.repo / ".gitignore").write_text("**/__pycache__/*.pyc\n", encoding="utf-8")
+        if regenerate:
+            cache.write_bytes(b"regenerated cache")
+        (self.repo / "README.md").write_text("# demo\n\nupdated\n", encoding="utf-8")
+        result = subprocess.run(
+            ["python3", "-B", str(SCRIPT), "commit-session", "--repo", str(self.repo), "--exclude", "plan.json", "--sign-mode", "unsigned", "--json"],
+            input=json.dumps({"commits": [{"id": "repo:single", "type": "fix", "title": "保留缓存删除并更新说明", "bullets": ["忽略重新生成的缓存，更新 README"]}]}) + "\n",
+            capture_output=True,
+            text=True,
+            timeout=20,
+            env=host_model_env(),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        prepared, complete = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(prepared["phase"], "prepared")
+        self.assertIn(cache_path, complete["results"][0]["paths"])
+        self.assertEqual(complete["phase"], "complete")
+        self.assertTrue(complete["ok"])
+        self.assertTrue(complete["preflight"]["passed"])
+        self.assertTrue(complete["postflight"]["snapshot_clean"])
+        self.assertEqual(complete["postflight"]["post_snapshot_changes"], [])
+        show = subprocess.run(["git", "-C", str(self.repo), "show", "--name-status", "--format=", "HEAD"], capture_output=True, text=True, check=True)
+        self.assertIn("M\tREADME.md", show.stdout)
+        expected_status = "M" if regenerate and not ignored else "D"
+        self.assertIn(f"{expected_status}\t{cache_path}", show.stdout)
+        if regenerate:
+            self.assertEqual(cache.read_bytes(), b"regenerated cache")
+        tracked = subprocess.run(["git", "-C", str(self.repo), "ls-files", "--", cache_path], capture_output=True, text=True, check=True)
+        self.assertEqual(bool(tracked.stdout), regenerate and not ignored)
+
+    def test_commit_session_preserves_deletion_of_regenerated_ignored_cache(self) -> None:
+        self.check_session_staged_deletion(regenerate=True, ignored=True)
+
+    def test_commit_session_handles_already_staged_missing_cache(self) -> None:
+        self.check_session_staged_deletion(regenerate=False, ignored=True)
+
+    def test_commit_session_stages_regenerated_nonignored_file(self) -> None:
+        self.check_session_staged_deletion(regenerate=True, ignored=False)
+
     def test_apply_plan_handles_already_staged_deletions(self) -> None:
         (self.repo / "obsolete.txt").write_text("old\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(self.repo), "add", "README.md", "src/demo.py", "obsolete.txt"], check=True)

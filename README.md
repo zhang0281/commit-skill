@@ -104,6 +104,8 @@ zsh -lic 'python3 "$HOME/.codex/skills/commit/scripts/commit_skill.py" commit-se
 
 默认不需要外围 `git diff`、tests、coverage、inventory 或验签调用：`phase=prepared` 已携带有界 semantic diff，`phase=complete` 已携带 `preflight` 与 `postflight`。仓库可用 `.commit-skill.json` 的 `preflight.commands[].argv` 配置 tests；这些命令在等待 AI message 时并行执行。`git diff --check` 始终使用临时 index 自动执行，不改变真实 staging。
 
+已暂存删除的缓存文件即使在磁盘上重新生成，只要它已被忽略，脚本仍提交删除并保留本地缓存。预检查和实际提交使用相同的暂存逻辑；已删除且未重新生成的文件也能正常提交。
+
 ## message-only 硬限制
 
 - AI 不得修改：

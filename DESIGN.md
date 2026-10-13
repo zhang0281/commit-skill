@@ -91,6 +91,7 @@
 15. **内建 transaction gates**
    - `phase=prepared` 内嵌有界 semantic diff，AI 不再另跑 `git diff`
    - preflight 用临时 Git index 执行 `git diff --check`，并在等待 AI message 时并行运行 `.commit-skill.json` 配置的 tests
+   - preflight 与 executor 共用 `stage_paths`：存在的路径使用 `git add`，缺失路径使用 `git update-index --remove`；对已暂存删除且重新生成为 ignored untracked 的路径保留删除，忽略规则仍匹配的 tracked 文件继续暂存当前内容
    - explicit `signed` 直接尝试 `git commit -S`，成功后在 session 内执行 `git verify-commit`；`auto` 保留完整探测与 fallback
    - `phase=complete` 内嵌最终 inventory、clean-tree 与 fingerprint 复核；后写入路径以 `post_snapshot_changes` 返回
    - `$commit` 外层只消费 prepared/complete，不再读取 memory/doctrine/loop 或补跑 coverage/inventory/验签

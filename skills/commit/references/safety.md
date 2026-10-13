@@ -8,6 +8,8 @@ The skill scripts may use only:
 
 - `git status`
 - `git diff --name-status` for read-only fact gathering
+- `git diff --cached --name-only --diff-filter=D --no-renames -z` to identify staged deletions
+- `git ls-files --others --ignored --exclude-standard -z` to identify regenerated ignored files
 - `git log`
 - `git config --get <key>`
 - `git rev-parse`
@@ -38,5 +40,6 @@ Never perform:
 
 ## Failure hygiene
 
+- Preflight and executor share staging logic. Preserve an existing staged deletion when the same path reappears as an ignored untracked file; leave the local generated file intact.
 - If commit fails after staging, executor attempts `git reset HEAD -- <files>` for this run's staged paths only.
 - Do not use destructive cleanup to make coverage pass.

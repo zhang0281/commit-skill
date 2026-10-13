@@ -22,28 +22,44 @@ def split_stage_paths(repo_path: str, files: list[str]) -> tuple[list[str], list
     return existing, missing
 
 
-def raise_stage_error(plan: CommitPlan, result, phase: str, files: list[str]) -> None:
+def raise_stage_error(repo_path: str, files: list[str], result, phase: str, staging_files: list[str], error_code: ErrorCode) -> None:
     details = {
-        "repo_path": plan.repo_path,
-        "files": plan.files,
+        "repo_path": repo_path,
+        "files": files,
         "staging_phase": phase,
-        "staging_files": files,
+        "staging_files": staging_files,
     }
-    raise SkillError(ErrorCode.GIT_ADD_FAILED, result.stderr.strip() or "git staging 失败", details)
+    raise SkillError(error_code, result.stderr.strip() or "git staging 失败", details)
+
+
+def stage_paths(repo_path: str, files: list[str], env: dict[str, str], error_code: ErrorCode = ErrorCode.GIT_ADD_FAILED):
+    """Stage snapshot paths while retaining deletions of regenerated ignored files."""
+    existing_files, missing_files = split_stage_paths(repo_path, files)
+    result = None
+    if existing_files:
+        deleted = git(repo_path, "diff", "--cached", "--name-only", "--diff-filter=D", "--no-renames", "-z", "--", *existing_files, env=env)
+        if deleted.returncode != 0:
+            raise_stage_error(repo_path, files, deleted, "find_staged_deletions", existing_files, error_code)
+        deleted_paths = set(deleted.stdout.split("\0")) - {""}
+        if deleted_paths:
+            ignored = git(repo_path, "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *sorted(deleted_paths), env=env)
+            if ignored.returncode != 0:
+                raise_stage_error(repo_path, files, ignored, "find_ignored_deletions", sorted(deleted_paths), error_code)
+            preserved = deleted_paths.intersection(ignored.stdout.split("\0"))
+            existing_files = [file for file in existing_files if file not in preserved]
+    if existing_files:
+        result = git(repo_path, "add", "--", *existing_files, env=env)
+        if result.returncode != 0:
+            raise_stage_error(repo_path, files, result, "add_existing", existing_files, error_code)
+    if missing_files:
+        result = git(repo_path, "update-index", "--remove", "--", *missing_files, env=env)
+        if result.returncode != 0:
+            raise_stage_error(repo_path, files, result, "remove_missing", missing_files, error_code)
+    return result
 
 
 def stage_files(plan: CommitPlan, env: dict[str, str]):
-    existing_files, missing_files = split_stage_paths(plan.repo_path, plan.files)
-    result = None
-    if existing_files:
-        result = git(plan.repo_path, "add", "--", *existing_files, env=env)
-        if result.returncode != 0:
-            raise_stage_error(plan, result, "add_existing", existing_files)
-    if missing_files:
-        result = git(plan.repo_path, "update-index", "--remove", "--", *missing_files, env=env)
-        if result.returncode != 0:
-            raise_stage_error(plan, result, "remove_missing", missing_files)
-    return result
+    return stage_paths(plan.repo_path, plan.files, env)
 
 
 def unstage_files(plan: CommitPlan, env: dict[str, str]):
