@@ -734,6 +734,43 @@ class ApplyPlanTest(unittest.TestCase):
     def test_commit_session_stages_regenerated_nonignored_file(self) -> None:
         self.check_session_staged_deletion(regenerate=True, ignored=False)
 
+    def test_commit_session_stages_tracked_files_inside_ignored_directories(self) -> None:
+        cache_paths = [".code-abyss/index.db", "src/__pycache__/demo.pyc"]
+        for path in cache_paths:
+            cache = self.repo / path
+            cache.parent.mkdir(parents=True, exist_ok=True)
+            cache.write_bytes(b"old\x00cache")
+        (self.repo / "obsolete.txt").write_text("old\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.repo), "add", "--", "README.md", "src/demo.py", "obsolete.txt", *cache_paths], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-m", "init"], check=True, capture_output=True)
+        (self.repo / ".gitignore").write_text("/.code-abyss/\n__pycache__/\n", encoding="utf-8")
+        for path in cache_paths:
+            (self.repo / path).write_bytes(b"updated\x00cache")
+        (self.repo / "src/__pycache__/new.pyc").write_bytes(b"ignored cache")
+        (self.repo / "src/new.py").write_text("print('new')\n", encoding="utf-8")
+        (self.repo / "obsolete.txt").unlink()
+        result = subprocess.run(
+            ["python3", "-B", str(SCRIPT), "commit-session", "--repo", str(self.repo), "--exclude", "plan.json", "--sign-mode", "unsigned", "--json"],
+            input=json.dumps({"commits": [{"id": "repo:single", "type": "fix", "title": "提交已跟踪缓存并保留忽略规则", "bullets": ["更新已跟踪缓存、新增源码并移除旧文件，不纳入新生成的缓存"]}]}) + "\n",
+            capture_output=True, text=True, timeout=20, env=host_model_env(),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        prepared, complete = [json.loads(line) for line in result.stdout.splitlines()]
+        self.assertEqual(prepared["phase"], "prepared")
+        self.assertEqual(complete["phase"], "complete")
+        self.assertTrue(complete["ok"])
+        self.assertTrue(complete["preflight"]["passed"])
+        self.assertTrue(complete["postflight"]["snapshot_clean"])
+        self.assertEqual(complete["postflight"]["post_snapshot_changes"], [])
+        show = subprocess.run(["git", "-C", str(self.repo), "show", "--name-status", "--format=", "HEAD"], capture_output=True, text=True, check=True)
+        for path in cache_paths:
+            self.assertIn(f"M\t{path}", show.stdout)
+            self.assertEqual((self.repo / path).read_bytes(), b"updated\x00cache")
+        self.assertIn("A\tsrc/new.py", show.stdout)
+        self.assertIn("D\tobsolete.txt", show.stdout)
+        self.assertNotIn("new.pyc", show.stdout)
+        self.assertEqual((self.repo / "src/__pycache__/new.pyc").read_bytes(), b"ignored cache")
+
     def test_apply_plan_handles_already_staged_deletions(self) -> None:
         (self.repo / "obsolete.txt").write_text("old\n", encoding="utf-8")
         subprocess.run(["git", "-C", str(self.repo), "add", "README.md", "src/demo.py", "obsolete.txt"], check=True)

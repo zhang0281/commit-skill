@@ -48,9 +48,23 @@ def stage_paths(repo_path: str, files: list[str], env: dict[str, str], error_cod
             preserved = deleted_paths.intersection(ignored.stdout.split("\0"))
             existing_files = [file for file in existing_files if file not in preserved]
     if existing_files:
-        result = git(repo_path, "add", "--", *existing_files, env=env)
+        tracked = git(repo_path, "ls-files", "--cached", "-z", "--", *existing_files, env=env)
+        if tracked.returncode != 0:
+            raise_stage_error(repo_path, files, tracked, "find_tracked", existing_files, error_code)
+        tracked_paths = set(tracked.stdout.split("\0")) - {""}
+        tracked_files = [file for file in existing_files if file in tracked_paths]
+        new_files = [file for file in existing_files if file not in tracked_paths]
+        if tracked_files:
+            # Explicit add rejects an ignored parent directory even for tracked children.
+            result = git(repo_path, "add", "--update", "--", *tracked_files, env=env)
+            if result.returncode != 0:
+                raise_stage_error(repo_path, files, result, "update_tracked", tracked_files, error_code)
+    else:
+        new_files = []
+    if new_files:
+        result = git(repo_path, "add", "--", *new_files, env=env)
         if result.returncode != 0:
-            raise_stage_error(repo_path, files, result, "add_existing", existing_files, error_code)
+            raise_stage_error(repo_path, files, result, "add_existing", new_files, error_code)
     if missing_files:
         result = git(repo_path, "update-index", "--remove", "--", *missing_files, env=env)
         if result.returncode != 0:

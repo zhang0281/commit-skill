@@ -106,6 +106,8 @@ zsh -lic 'python3 "$HOME/.codex/skills/commit/scripts/commit_skill.py" commit-se
 
 已暂存删除的缓存文件即使在磁盘上重新生成，只要它已被忽略，脚本仍提交删除并保留本地缓存。预检查和实际提交使用相同的暂存逻辑；已删除且未重新生成的文件也能正常提交。
 
+已跟踪文件位于被忽略的目录（如 `.code-abyss/` 或 `__pycache__/`）时，脚本按固定快照使用 `git add --update` 暂存；新文件仍经过普通忽略检查，不强制添加缓存，也不扩大提交范围。
+
 ## message-only 硬限制
 
 - AI 不得修改：

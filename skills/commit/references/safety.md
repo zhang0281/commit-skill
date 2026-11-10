@@ -10,11 +10,13 @@ The skill scripts may use only:
 - `git diff --name-status` for read-only fact gathering
 - `git diff --cached --name-only --diff-filter=D --no-renames -z` to identify staged deletions
 - `git ls-files --others --ignored --exclude-standard -z` to identify regenerated ignored files
+- `git ls-files --cached -z -- <files>` to separate tracked paths from new files
 - `git log`
 - `git config --get <key>`
 - `git rev-parse`
 - `git branch --show-current`
 - `git add <file>`
+- `git add --update -- <tracked-files>` to stage tracked snapshot paths inside ignored directories
 - `git update-index --remove -- <file>` only to stage paths that are missing from the worktree but present in the plan snapshot
 - `git commit -m`
 - `git commit -S -m`

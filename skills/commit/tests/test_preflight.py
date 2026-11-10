@@ -76,6 +76,46 @@ class PreflightTest(unittest.TestCase):
             start_preflight(self.plan())
         self.assertEqual(ctx.exception.code, ErrorCode.PREFLIGHT_FAILED)
 
+    def test_stages_tracked_files_inside_ignored_directories(self) -> None:
+        paths = [".code-abyss/index.db", "src/__pycache__/module.pyc"]
+        for path in paths:
+            file = self.repo / path
+            file.parent.mkdir(parents=True, exist_ok=True)
+            file.write_bytes(b"old\x00cache")
+        subprocess.run(["git", "-C", str(self.repo), "add", "--", *paths], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-m", "track caches"], check=True, capture_output=True)
+        (self.repo / ".gitignore").write_text("/.code-abyss/\n__pycache__/\n", encoding="utf-8")
+        for path in paths:
+            (self.repo / path).write_bytes(b"updated\x00cache")
+        before = (self.repo / ".git" / "index").read_bytes()
+        payload = finish_preflight(start_preflight(self.plan([".gitignore", *paths])))
+        self.assertTrue(payload["passed"])
+        self.assertEqual((self.repo / ".git" / "index").read_bytes(), before)
+
+    def test_checks_whitespace_inside_ignored_directory(self) -> None:
+        directory = self.repo / "cache"
+        directory.mkdir()
+        (directory / "tracked.txt").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(self.repo), "add", "cache/tracked.txt"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-m", "track cache"], check=True, capture_output=True)
+        (self.repo / ".gitignore").write_text("cache/\n", encoding="utf-8")
+        (directory / "tracked.txt").write_text("bad trailing space  \n", encoding="utf-8")
+        before = (self.repo / ".git" / "index").read_bytes()
+        with self.assertRaises(SkillError) as ctx:
+            start_preflight(self.plan(["cache/tracked.txt"]))
+        self.assertEqual(ctx.exception.code, ErrorCode.PREFLIGHT_FAILED)
+        self.assertIn("diff_check", ctx.exception.details)
+        self.assertEqual((self.repo / ".git" / "index").read_bytes(), before)
+
+    def test_rejects_untracked_file_inside_ignored_directory(self) -> None:
+        (self.repo / "cache").mkdir()
+        (self.repo / "cache/new.pyc").write_bytes(b"new cache")
+        (self.repo / ".gitignore").write_text("cache/\n", encoding="utf-8")
+        with self.assertRaises(SkillError) as ctx:
+            start_preflight(self.plan(["cache/new.pyc"]))
+        self.assertEqual(ctx.exception.code, ErrorCode.PREFLIGHT_FAILED)
+        self.assertEqual(ctx.exception.details["staging_phase"], "add_existing")
+
     def test_rejects_ignored_file_without_staged_deletion(self) -> None:
         (self.repo / ".gitignore").write_text("cache.pyc\n", encoding="utf-8")
         (self.repo / "cache.pyc").write_bytes(b"cache")
